@@ -27,7 +27,7 @@ jobs:
 
       - id: test-coverage
         name: Run tests with coverage
-        run: cargo tarpaulin --verbose --all-features --no-fail-fast --out Xml
+        run: cargo tarpaulin --verbose --all-targets --all-features --no-fail-fast --out Xml
 
       - id: teardown
         name: Tear down test environment
