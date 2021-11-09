@@ -3,6 +3,8 @@ name = "buska-core"
 version = "0.0.1"
 authors = ["aesteve <arnaud.esteve@decathlon.com>"]
 edition = "2021"
+description = "A library providing utilities to look for data in Kafka topics"
+keywords = ["kafka", "apache kafka", "search", "lib"]
 
 [dependencies]
 rdkafka = { version =  "0.27" , features = ["ssl", "cmake-build" ] }

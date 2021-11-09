@@ -3,7 +3,9 @@ name = "buska"
 version = "0.0.1"
 edition = "2021"
 authors = ["aesteve <arnaud.esteve@gmail.com>"]
-
+description = "A set of utilities to look for data in Apache Kafka topics"
+keywords = ["kafka", "apache kafka", "search"]
+repository = "https://github.com/aesteve/buska"
 
 [dependencies]
 

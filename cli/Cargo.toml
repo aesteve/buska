@@ -3,7 +3,8 @@ name = "buska-cli"
 version = "0.0.1"
 edition = "2021"
 authors = ["aesteve <arnaud.esteve@gmail.com>"]
-
+description = "A CLI to look for data in Kafka topics"
+keywords = ["kafka", "apache kafka", "search", "cli"]
 
 [dependencies]
 buska-core = { path = "../core" }

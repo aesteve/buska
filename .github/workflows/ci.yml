@@ -10,6 +10,13 @@ jobs:
           toolchain: stable
           components: clippy
           override: true
+
+      - id: version
+        name: Get Package version
+        run: >
+          echo "::set-output name=version::$(cargo pkgid | cut -d# -f2 | cut -d: -f2)"
+
+
       - uses: actions-rs/clippy-check@v1
         id: clippy-check
         name: Check project against Clippy
@@ -25,21 +32,32 @@ jobs:
         name: Install Cargo tarpaulin
         run: cargo install cargo-tarpaulin
 
-      - id: test-coverage
-        name: Run tests with coverage
-        run: cargo tarpaulin --verbose --all-targets --all-features --no-fail-fast --out Xml
+# FIXME: cargo tarpaulin doesn't seem to work: using --all-targets says this option has been specified more than once, not using it results in 0 tests being run
+#      - id: test-coverage
+#        name: Run tests with coverage
+#        run: cargo tarpaulin --verbose --all-targets --all-features --no-fail-fast --out Xml
+#
+#      - name: Upload to codecov.io
+#        uses: codecov/codecov-action@v2
+#        with:
+#          #token: ${{secrets.CODECOV_TOKEN}} # not required for public repos
+#          fail_ci_if_error: true
+
+      - id: test
+        name: Test all targets
+        run: cargo test --all-features --all-targets
 
       - id: teardown
         name: Tear down test environment
         if: always()
         run: docker-compose -f "docker-compose.yml" down
 
-      - name: Upload to codecov.io
-        uses: codecov/codecov-action@v2
-        with:
-          #token: ${{secrets.CODECOV_TOKEN}} # not required for public repos
-          fail_ci_if_error: true
 
       - id: docker-build
         name: Build release using Docker
-        run: docker build .
+        run: docker build -t aesteve/buska-cli:${{steps.version.outputs.version}} .
+
+      - id: docker-push
+        name: Push docker image to Docker hub
+        if: github.ref == 'refs/heads/main'
+        run: docker push aesteve/buska-cli:${{steps.version.outputs.version}}
