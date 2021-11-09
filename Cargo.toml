@@ -1,0 +1,15 @@
+[package]
+name = "buska"
+version = "0.0.1"
+edition = "2021"
+authors = ["aesteve <arnaud.esteve@gmail.com>"]
+
+
+[dependencies]
+
+
+[workspace]
+members = [
+    "./core",
+    "./cli"
+]
