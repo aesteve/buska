@@ -23,7 +23,7 @@ jobs:
 
       - id: install-tarpaulin
         name: Install Cargo tarpaulin
-        run: cargo install tarpaulin
+        run: cargo install cargo-tarpaulin
 
       - id: test-coverage
         name: Run tests with coverage
