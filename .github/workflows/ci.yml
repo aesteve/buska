@@ -11,12 +11,6 @@ jobs:
           components: clippy
           override: true
 
-      - id: version
-        name: Get Package version
-        run: >
-          echo "::set-output name=version::$(cargo pkgid | cut -d# -f2 | cut -d: -f2)"
-
-
       - uses: actions-rs/clippy-check@v1
         id: clippy-check
         name: Check project against Clippy
@@ -52,6 +46,10 @@ jobs:
         if: always()
         run: docker-compose -f "docker-compose.yml" down
 
+      - id: version
+        name: Get Package version
+        run: >
+          echo "::set-output name=version::$(cargo pkgid | cut -d# -f2 | cut -d: -f2)"
 
       - id: docker-build
         name: Build release using Docker
