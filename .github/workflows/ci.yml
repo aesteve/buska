@@ -15,12 +15,6 @@ jobs:
           components: clippy
           override: true
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v1
-        with:
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
-          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
-
       - uses: actions-rs/clippy-check@v1
         id: clippy-check
         name: Check project against Clippy
@@ -49,7 +43,7 @@ jobs:
 
       - id: test
         name: Test all targets
-        run: cargo test --all-features --all-targets
+        run: cargo test --all --all-features --all-targets -- --nocapture
 
       - id: teardown
         name: Tear down test environment
@@ -60,6 +54,16 @@ jobs:
         name: Get Package version
         run: >
           echo "::set-output name=version::$(cargo pkgid | cut -d# -f2 | cut -d: -f2)"
+
+      #
+      # Docker
+      #
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
 
       - id: docker-build
         name: Build release using Docker

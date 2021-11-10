@@ -106,7 +106,7 @@ pub async fn search_topic<T: SearchPredicate<OwnedMessage> + Send>(
 }
 
 async fn seek_partitions(config: KafkaClusterConfig, consumer: &StreamConsumer, topic: &str, bounds: &SearchBounds) -> KafkaResult<HashMap<i32, (i64, i64)>> {
-    tokio::time::sleep(Duration::from_millis(500)).await; // Subscription must be effective before seeking
+    tokio::time::sleep(Duration::from_millis(1000)).await; // Subscription must be effective before seeking
     println!("Seeking partitions");
     let loop_inifinitely = bounds.end == SearchEnd::Unbounded;
     if let SearchStart::Time(beginning) = bounds.start {
