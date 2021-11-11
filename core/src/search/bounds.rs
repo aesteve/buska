@@ -9,6 +9,7 @@ pub enum SearchStart {
 #[derive(Clone, Debug, PartialEq)]
 pub enum SearchEnd {
     CurrentLast,
+    Time(DateTime<Utc>),
     Unbounded
 }
 

@@ -1,47 +1,45 @@
-use jsonpath_rust::JsonPathFinder;
-use rdkafka::Message;
-use rdkafka::message::OwnedMessage;
-use serde_json::Value;
-use crate::search::{MsgExtractor, SearchPredicate};
-
-
 // README:
 // Unfortunately, the JsonPath struct doesn't seem to be accessible (crate private), that's a real shame since the JSON path will be parsed for every msg resulting in very poor performances
 // Best thing would be to parse the path when creating the struct, and storing it
 // In order to workaround this restriction, we have used `set_json` and therefore made `MsgExtractor::extract` accept &mut self...
 
-pub struct JsonPathSingleMatcher {
-    pub path: JsonPathFinder,
-    pub expected: Value,
+use jsonpath_rust::JsonPathFinder;
+use rdkafka::Message;
+use rdkafka::message::OwnedMessage;
+use serde_json::Value;
+use crate::search::MsgExtractor;
+
+pub fn json_single_extract(path: &str) -> Result<JsonPathSingleExtract, String> {
+    Ok(JsonPathSingleExtract { path: JsonPathFinder::from_str(r"{}", path)? })
 }
 
-pub struct JsonPathMultiMatcher {
-    path: JsonPathFinder,
-    expected: Vec<Value>,
+pub fn json_multi_extract(path: &str) -> Result<JsonPathMultiExtract, String> {
+    Ok(JsonPathMultiExtract { path: JsonPathFinder::from_str(r"{}", path)? })
 }
 
-impl JsonPathSingleMatcher {
-    pub fn new(path: &str, expected: Value) -> Result<Self, String> {
-        let path = JsonPathFinder::from_str(r"{}", path)?;
-        Ok(JsonPathSingleMatcher { path, expected })
-    }
+/// Extracts a single JSON value from a record, by using a JSON path definition
+/// Example: Extracts `"foo"` from `r"{"field": "foo"}` by using path: `"$.field"`
+pub struct JsonPathSingleExtract {
+    pub(crate) path: JsonPathFinder
 }
 
-impl JsonPathMultiMatcher {
-    pub fn new(path: &str, expected: Vec<Value>) -> Result<Self, String> {
-        let path = JsonPathFinder::from_str(r"{}", path)?;
-        Ok(JsonPathMultiMatcher { path, expected })
-    }
+
+/// Extracts multiple JSON values from a record, by using a JSON path definition
+/// Example: Extracts "["foo", "bar"]" from `r"{"field": ["foo", "bar"]}"` by using path: `"$.field"`
+pub struct JsonPathMultiExtract {
+    pub(crate) path: JsonPathFinder
 }
 
-impl MsgExtractor<Value> for JsonPathSingleMatcher {
+impl MsgExtractor<Value> for JsonPathSingleExtract {
     fn extract(&mut self, msg: &OwnedMessage) -> Option<Value> {
         let finder = &mut self.path;
         match msg.payload_view::<str>() {
             Some(Ok(json)) => {
                 if let Ok(value) = serde_json::from_str::<Value>(json) {
                     finder.set_json(value);
-                    Some(finder.find())
+                    let found = finder.find(); // returns a JSON array
+                    found.as_array()
+                        .and_then(|values| values.first().cloned())
                 } else {
                     None
                 }
@@ -51,7 +49,7 @@ impl MsgExtractor<Value> for JsonPathSingleMatcher {
     }
 }
 
-impl MsgExtractor<Vec<Value>> for JsonPathMultiMatcher {
+impl MsgExtractor<Vec<Value>> for JsonPathMultiExtract {
     fn extract(&mut self, msg: &OwnedMessage) -> Option<Vec<Value>> {
         let finder = &mut self.path;
         match msg.payload_view::<str>() {
@@ -68,49 +66,69 @@ impl MsgExtractor<Vec<Value>> for JsonPathMultiMatcher {
     }
 }
 
-impl SearchPredicate<OwnedMessage> for JsonPathSingleMatcher {
-    fn matches(&mut self, msg: &OwnedMessage) -> bool {
-        if let Some(value) = self.extract(msg) {
-            if value.is_array() {
-                let v = &value[0];
-                self.expected == *v
-            } else {
-                self.expected == value
-            }
-        } else {
-            false
-        }
-    }
-}
-
-impl SearchPredicate<OwnedMessage> for JsonPathMultiMatcher {
-    fn matches(&mut self, msg: &OwnedMessage) -> bool {
-        if let Some(value) = self.extract(msg) {
-            self.expected == value
-        } else {
-            false
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use rdkafka::Message;
+    use chrono::Utc;
+    use rdkafka::message::OwnedMessage;
+    use rdkafka::{Message, Timestamp};
     use tokio::sync::mpsc;
     use crate::search::bounds::{SearchBounds, SearchEnd, SearchStart};
-    use crate::search::json::JsonPathSingleMatcher;
-    use crate::search::{ProgressNotification, SearchNotification};
-    use crate::{all_matches, search_topic};
+    use crate::search::extractors::json::json_single_extract;
+    use crate::search::matchers::PerfectMatch;
+    use crate::search::{MsgExtractor, SearchDefinition};
+    use crate::search::notifications::{ProgressNotification, SearchNotification};
+    use crate::search_topic;
     use crate::tests::{clean, collect_search_notifications, NestedTestRecord, prepare, produce_json_records, test_cluster_config, TestRecord};
+    use crate::utils::all_matches;
+
+    #[test]
+    fn test_single_extract() {
+        let mut extractor = json_single_extract("$.nested.int").expect("Could not create JSON path");
+        let key = "some";
+        let i = 4;
+        let payload = TestRecord {
+            key: key.to_string(),
+            nested: NestedTestRecord {
+                int: i,
+                ints: vec![i],
+                string: "some-value".to_string()
+            }
+
+        };
+        let json_payload = Some(serde_json::to_string(&payload).expect("Could not serialize test record").into_bytes());
+        let record = OwnedMessage::new(json_payload, Some(key.as_bytes().to_vec()), "topic".to_string(), Timestamp::CreateTime(Utc::now().timestamp_millis()), 0, 0, None);
+        assert_eq!(extractor.extract(&record), Some(serde_json::json!(i)));
+    }
+
+
+    #[test]
+    fn test_multi_extract() {
+        let mut extractor = json_single_extract("$.nested.ints").expect("Could not create JSON path");
+        let key = "some";
+        let i = 4;
+        let payload = TestRecord {
+            key: key.to_string(),
+            nested: NestedTestRecord {
+                int: i,
+                ints: vec![i, i+1],
+                string: "some-value".to_string()
+            }
+
+        };
+        let json_payload = Some(serde_json::to_string(&payload).expect("Could not serialize test record").into_bytes());
+        let record = OwnedMessage::new(json_payload, Some(key.as_bytes().to_vec()), "topic".to_string(), Timestamp::CreateTime(Utc::now().timestamp_millis()), 0, 0, None);
+        assert_eq!(extractor.extract(&record), Some(serde_json::json!(vec![i, i+1])));
+    }
+
 
     #[tokio::test]
-    async fn test_json_path() {
+    async fn test_single_match_from_kafka() {
         env_logger::builder().is_test(true).init();
         let topic = "some_topic";
         prepare(topic).await;
         let records = (1..1000)
             .into_iter()
-            .map(|i|TestRecord { key: i.to_string(), nested: NestedTestRecord { int: i, string: format!("{}_nested", i) } })
+            .map(|i|TestRecord { key: i.to_string(), nested: NestedTestRecord { int: i, ints: vec![i], string: format!("{}_nested", i) } })
             .collect::<Vec<TestRecord>>();
         produce_json_records(topic, &records).await;
         let conf = test_cluster_config();
@@ -127,7 +145,9 @@ mod tests {
         );
         tasks.push(
             tokio::task::spawn(async move {
-                let mut search_definition = JsonPathSingleMatcher::new("$.nested.int", serde_json::json!(4)).expect("Could not create JSON path");
+                let extractor = json_single_extract("$.nested.int").expect("Could not create JSON path");
+                let matcher = PerfectMatch::new(serde_json::json!(4));
+                let mut search_definition = SearchDefinition::new(extractor, matcher);
                 search_topic(conf, topic.to_string(), sender, bounds, &mut search_definition).await;
                 vec![]
             })

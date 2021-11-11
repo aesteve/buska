@@ -1,6 +1,6 @@
 use rdkafka::Message;
 use rdkafka::message::{Headers, OwnedMessage};
-use crate::search::{MsgExtractor, PerfectMatchPredicate, SearchDefinition};
+use crate::search::MsgExtractor;
 
 pub struct HeaderStringExtractor {
     pub name: String
@@ -18,13 +18,5 @@ impl MsgExtractor<String> for HeaderStringExtractor {
             }
             None
         })
-    }
-}
-
-pub fn match_header(name: &str, expected_value: &str) -> SearchDefinition<String, HeaderStringExtractor, PerfectMatchPredicate<String>> {
-    SearchDefinition {
-        extractor: HeaderStringExtractor { name: name.to_string() },
-        matcher: PerfectMatchPredicate::new(expected_value.to_string()),
-        phantom: Default::default()
     }
 }

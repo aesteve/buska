@@ -1,6 +1,6 @@
 use rdkafka::Message;
 use rdkafka::message::OwnedMessage;
-use crate::search::{MsgExtractor, SearchDefinition, SearchPredicate};
+use crate::search::MsgExtractor;
 
 pub struct PayloadStringExtractor {}
 
@@ -10,13 +10,5 @@ impl MsgExtractor<String> for PayloadStringExtractor {
             Some(Ok(payload)) => Some(payload.to_string()),
             _ => None
         }
-    }
-}
-
-pub fn payload_matches<P: SearchPredicate<String>>(matcher: P) -> SearchDefinition<String, PayloadStringExtractor, P> {
-    SearchDefinition {
-        extractor: PayloadStringExtractor {},
-        matcher,
-        phantom: Default::default()
     }
 }
