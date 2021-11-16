@@ -161,7 +161,7 @@ async fn seek_partitions(config: KafkaClusterConfig, consumer: &StreamConsumer, 
     if let Err(e) = sender.send(SearchNotification::Prepare(PreparationStep::AssignPartitions)).await {
         log::error!("Could not send notification {}", e);
     }
-    consumer.assign(&topic_partition_list)?;
+    consumer.assign(&topic_partition_list).expect("Could not assign partitions");
 
     // 3. Fetch offsets for times if needed
     log::debug!("Fetching offsets for time");
@@ -175,7 +175,7 @@ async fn seek_partitions(config: KafkaClusterConfig, consumer: &StreamConsumer, 
         .collect();
     let start_offsets: HashMap<i32, RdOffset> =
         if let SearchStart::Time(_) = bounds.start {
-            let offsets = consumer.offsets_for_times(topic_partition_list, req_timeout)?;
+            let offsets = consumer.offsets_for_times(topic_partition_list, req_timeout).expect("Could not find offsets for time");
             offsets.to_topic_map()
                 .into_iter()
                 .map(|((_, partition), offset)| (partition, offset))
