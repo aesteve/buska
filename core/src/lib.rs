@@ -153,7 +153,7 @@ async fn seek_partitions(config: KafkaClusterConfig, consumer: &StreamConsumer, 
     for partition in partitions {
         let mut part = topic_partition_list.add_partition(topic, partition);
         if let SearchStart::Time(beginning) = bounds.start {
-            part.set_offset(Offset(beginning.timestamp_millis()))?;
+            part.set_offset(Offset(beginning.timestamp_millis())).expect("Could not set offset");
         }
     }
     // 2. Assign partitions to consumer
