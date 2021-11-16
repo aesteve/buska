@@ -1,14 +1,17 @@
+use std::collections::HashMap;
 use std::path::Path;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, TimeZone, Utc};
 use clap::Parser;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rdkafka::Message;
+// use rdkafka::Message;
 use tokio::sync::mpsc::Receiver;
 use buska_core::config::KafkaClusterConfig;
 use buska_core::search::bounds::{SearchBounds, SearchEnd, SearchStart};
 use buska_core::search::extractors::header::HeaderStringExtractor;
 use buska_core::search::extractors::json::{json_multi_extract, json_single_extract};
 use buska_core::search::extractors::key::KeyExtractor;
-use buska_core::search::notifications::SearchNotification;
+use buska_core::search::notifications::{ProgressNotification, SearchNotification};
 use buska_core::search::SearchDefinition;
 use buska_core::search::matchers::PerfectMatch;
 use buska_core::search_topic;
@@ -94,8 +97,12 @@ struct BuskaCli {
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
+
     let cli: BuskaCli = BuskaCli::parse();
+    let display_every = ChronoDuration::seconds(1);
     let bounds = extract_search_bounds(&cli);
+    let unbounded = bounds.end == SearchEnd::Unbounded;
     let cluster_config = extract_cluster_config(&cli);
     let (sender, receiver) = tokio::sync::mpsc::channel::<SearchNotification>(1024);
 
@@ -103,7 +110,7 @@ async fn main() {
     let mut tasks = vec![];
     // Launch the loop that will listen to search notifications and print the result to stdout
     tasks.push(tokio::task::spawn(async move {
-        cli_notifications_loop(receiver).await;
+        cli_notifications_loop(receiver, unbounded).await;
     }));
 
     // Launch the Search process with the appropriate options extracted from user-inputs
@@ -116,7 +123,8 @@ async fn main() {
                 cli.topic,
                 sender,
                 bounds,
-                &mut SearchDefinition::new(extractor, matcher)
+                &mut SearchDefinition::new(extractor, matcher),
+                display_every
             ).await
         }));
     } else if let Some(key) = cli.extract_key {
@@ -128,7 +136,8 @@ async fn main() {
                 cli.topic,
                 sender,
                 bounds,
-                &mut SearchDefinition::new(extractor, matcher)
+                &mut SearchDefinition::new(extractor, matcher),
+                display_every
             ).await;
         }))
     } else if let Some(path) = cli.extract_value_json_path {
@@ -140,7 +149,8 @@ async fn main() {
                 cli.topic,
                 sender,
                 bounds,
-                &mut SearchDefinition::new(extractor, matcher)
+                &mut SearchDefinition::new(extractor, matcher),
+                display_every
             ).await;
         }))
     } else if let Some(path) = cli.extract_value_json_path_array {
@@ -152,7 +162,8 @@ async fn main() {
                 cli.topic,
                 sender,
                 bounds,
-                &mut SearchDefinition::new(extractor, matcher)
+                &mut SearchDefinition::new(extractor, matcher),
+                display_every
             ).await;
         }))
     } else {
@@ -201,20 +212,44 @@ fn extract_search_bounds(cli: &BuskaCli) -> SearchBounds {
 }
 
 /// Listens to search notifications and prints those to stdout
-async fn cli_notifications_loop(mut receiver: Receiver<SearchNotification>) {
+async fn cli_notifications_loop(mut receiver: Receiver<SearchNotification>, unbounded: bool) {
     let mut stop = false;
+    let mut bars: Option<HashMap<i32, ProgressBar>> = None;
+    let mut step = 0;
     while !stop {
         if let Some(received) = receiver.recv().await {
             match received {
-                SearchNotification::Start => println!("Started searching"),
-                SearchNotification::Finish(notif) => {
+                SearchNotification::Prepare(preparation) => {
+                    step += 1;
+                    println!("[{}/7] {}", step, preparation);
+                },
+                SearchNotification::Start =>
+                    println!("[7/7] Searching"),
+                SearchNotification::Finish(summary) => {
                     stop = true;
+                    if let Some(b) = bars.as_mut() {
+                        for bar in b.values_mut() {
+                            bar.finish();
+                        }
+                    }
                     println!("Finished searching. Summary:");
-                    println!("{}", notif);
-                }
+                    println!("{}", summary);
+                },
                 SearchNotification::Progress(progress) => {
-                    println!("Query made progress:");
-                    println!("{}", progress);
+                    if !unbounded { // can't display a progress bar if running infinitely
+                        if let Some(b) = bars.as_mut() {
+                            for (part, part_progress) in progress.per_partition_progress {
+                                let bar = b.get_mut(&part).unwrap();
+                                bar.set_position(part_progress.done as u64);
+                                if part_progress.done >= part_progress.total {
+                                    bar.finish();
+                                }
+                            }
+                        } else {
+                            let (_, progress_bars) = create_partition_bars(progress);
+                            bars = Some(progress_bars);
+                        }
+                    }
                 },
                 SearchNotification::Match(matched) => {
                     println!("Match found:");
@@ -227,4 +262,20 @@ async fn cli_notifications_loop(mut receiver: Receiver<SearchNotification>) {
             }
         }
     }
+}
+
+fn create_partition_bars(progress: ProgressNotification) -> (MultiProgress, HashMap<i32, ProgressBar>) {
+    let sty = ProgressStyle::default_bar()
+        .template("{msg} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos:>7}/{len:7} ({eta})")
+        .with_key("eta", |state| format!("{:.1}s", state.eta().as_secs_f64()))
+        .progress_chars("#>-");
+    let mut map = HashMap::new();
+    let mb = MultiProgress::new();
+    for (part, part_progress) in progress.per_partition_progress {
+        let part_bar = mb.add(ProgressBar::new(part_progress.total as u64)
+            .with_message(format!("Partition {}: ", part)))
+            .with_style(sty.clone());
+        map.insert(part, part_bar);
+    }
+    (mb, map)
 }
