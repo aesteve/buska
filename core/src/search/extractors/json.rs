@@ -158,7 +158,7 @@ mod tests {
             .collect();
         // println!("{:?}", all_notifs);
         let first = &all_notifs[0];
-        assert!(matches!(first, SearchNotification::Start), "The first notification received must be the Start notification");
+        assert!(matches!(first, SearchNotification::Prepare(_)), "The first notification received must be a Prepare notification");
 
         let finished = all_notifs.last().expect("Could access the last received notification");
         assert!(matches!(finished, SearchNotification::Finish(_)), "The last notification received must be the Finished notification");
@@ -179,7 +179,7 @@ mod tests {
         let mut last_nb_matches = 0;
         for progress in progresses_received {
             assert_eq!(topic, progress.topic.as_str());
-            assert!(progress.overall_progress.done > last_nb_read, "Progress notifications must have been received in order");
+            assert!(progress.overall_progress.done >= last_nb_read, "Progress notifications must have been received in order");
             last_nb_read = progress.overall_progress.done;
             assert!(progress.matches >= last_nb_matches, "Progress notifications must have been received in order");
             last_nb_matches = progress.matches;
