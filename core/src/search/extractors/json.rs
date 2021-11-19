@@ -77,7 +77,7 @@ mod tests {
     use crate::search::matchers::PerfectMatch;
     use crate::search::{MsgExtractor, SearchDefinition};
     use crate::search::notifications::{ProgressNotification, SearchNotification};
-    use crate::search_topic;
+    use crate::{ChronoDuration, search_topic};
     use crate::tests::{clean, collect_search_notifications, NestedTestRecord, prepare, produce_json_records, test_cluster_config, TestRecord};
     use crate::utils::all_matches;
 
@@ -140,9 +140,10 @@ mod tests {
         let mut tasks = vec![];
         tasks.push(
             tokio::task::spawn(async move {
-                collect_search_notifications(&mut receiver).await
+                collect_search_notifications(&mut receiver, ChronoDuration::seconds(30)).await
             })
         );
+        // std::thread::sleep(core::time::Duration::from_secs(2));
         tasks.push(
             tokio::task::spawn(async move {
                 let extractor = json_single_extract("$.nested.int").expect("Could not create JSON path");

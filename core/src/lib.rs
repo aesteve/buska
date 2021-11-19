@@ -224,7 +224,7 @@ async fn seek_partitions(config: KafkaClusterConfig, consumer: &StreamConsumer, 
         let offset_to_seek = start_offsets[partition];
         let mut nb_retries = 0;
         let mut seeked = false;
-        let max_retries = 5;
+        let max_retries = 20;
         let mut error = KafkaError::Seek("Could not seek partition".to_string());
         while !seeked && nb_retries < max_retries {
             if let Err(err) = consumer.seek(topic, *partition, offset_to_seek, req_timeout) {
@@ -270,6 +270,7 @@ fn create_client(conf: &KafkaClusterConfig) -> StreamConsumer {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+    use chrono::Utc;
 
     use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
     use rdkafka::ClientConfig;
@@ -277,6 +278,7 @@ mod tests {
     use serde::{Serialize, Deserialize};
     use serde_json::to_string;
     use tokio::sync::mpsc::Receiver;
+    use crate::ChronoDuration;
 
     use crate::config::KafkaClusterConfig;
     use crate::search::notifications::SearchNotification;
@@ -381,10 +383,11 @@ mod tests {
 
     /// Given a receiver, collects every received notification until the end marker has been received
     /// Then returns the list of every received notification
-    pub(crate) async fn collect_search_notifications(receiver: &mut Receiver<SearchNotification>) -> Vec<SearchNotification> {
+    pub(crate) async fn collect_search_notifications(receiver: &mut Receiver<SearchNotification>, timeout: ChronoDuration) -> Vec<SearchNotification> {
         let mut notifications = Vec::new();
         let mut stop = false;
-        while !stop {
+        let start = Utc::now();
+        while !stop && Utc::now() < (start + timeout) {
             if let Some(received) = receiver.recv().await {
                 notifications.push(received.clone());
                 if let SearchNotification::Finish(_) = received {
