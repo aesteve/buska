@@ -68,7 +68,7 @@ impl MsgExtractor<Vec<Value>> for JsonPathMultiExtract {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
+    use chrono::{Duration, Utc};
     use rdkafka::message::OwnedMessage;
     use rdkafka::{Message, Timestamp};
     use tokio::sync::mpsc;
@@ -77,7 +77,7 @@ mod tests {
     use crate::search::matchers::PerfectMatch;
     use crate::search::{MsgExtractor, SearchDefinition};
     use crate::search::notifications::{ProgressNotification, SearchNotification};
-    use crate::search_topic;
+    use crate::{ChronoDuration, search_topic};
     use crate::tests::{clean, collect_search_notifications, NestedTestRecord, prepare, produce_json_records, test_cluster_config, TestRecord};
     use crate::utils::all_matches;
 
@@ -140,15 +140,16 @@ mod tests {
         let mut tasks = vec![];
         tasks.push(
             tokio::task::spawn(async move {
-                collect_search_notifications(&mut receiver).await
+                collect_search_notifications(&mut receiver, ChronoDuration::seconds(30)).await
             })
         );
+        // std::thread::sleep(core::time::Duration::from_secs(2));
         tasks.push(
             tokio::task::spawn(async move {
                 let extractor = json_single_extract("$.nested.int").expect("Could not create JSON path");
                 let matcher = PerfectMatch::new(serde_json::json!(4));
                 let mut search_definition = SearchDefinition::new(extractor, matcher);
-                search_topic(conf, topic.to_string(), sender, bounds, &mut search_definition).await;
+                search_topic(conf, topic.to_string(), sender, bounds, &mut search_definition, Duration::milliseconds(1)).await;
                 vec![]
             })
         );
@@ -158,7 +159,7 @@ mod tests {
             .collect();
         // println!("{:?}", all_notifs);
         let first = &all_notifs[0];
-        assert!(matches!(first, SearchNotification::Start), "The first notification received must be the Start notification");
+        assert!(matches!(first, SearchNotification::Prepare(_)), "The first notification received must be a Prepare notification");
 
         let finished = all_notifs.last().expect("Could access the last received notification");
         assert!(matches!(finished, SearchNotification::Finish(_)), "The last notification received must be the Finished notification");
@@ -179,8 +180,8 @@ mod tests {
         let mut last_nb_matches = 0;
         for progress in progresses_received {
             assert_eq!(topic, progress.topic.as_str());
-            assert!(progress.read > last_nb_read, "Progress notifications must have been received in order");
-            last_nb_read = progress.read;
+            assert!(progress.overall_progress.done >= last_nb_read, "Progress notifications must have been received in order");
+            last_nb_read = progress.overall_progress.done;
             assert!(progress.matches >= last_nb_matches, "Progress notifications must have been received in order");
             last_nb_matches = progress.matches;
         }

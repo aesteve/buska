@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use chrono::{DateTime, Duration, Utc};
 use rdkafka::message::OwnedMessage;
@@ -6,18 +6,45 @@ use rdkafka::message::OwnedMessage;
 #[derive(Debug, Clone)]
 pub enum SearchNotification {
     Start,
+    Prepare(PreparationStep),
     Finish(FinishNotification),
     Progress(ProgressNotification),
     Match(OwnedMessage)
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum PreparationStep {
+    CreateClient,
+    FetchMetadata,
+    OffsetsForTime,
+    AssignPartitions,
+    FetchWatermarks,
+    SeekPartitions,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Progress {
+    pub done: i64,
+    pub total: i64,
+    pub rate: f64,
+}
+
+impl Progress {
+    pub fn new(done: i64, total: i64) -> Progress {
+        Progress {
+            done,
+            total,
+            rate: done as f64 / total as f64
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProgressNotification {
     pub topic: String,
-    pub overall_progress: f64,
-    pub per_partition_progress: HashMap<i32, f64>,
-    pub matches: u32,
-    pub read: u32,
+    pub overall_progress: Progress,
+    pub per_partition_progress: BTreeMap<i32, Progress>,
+    pub matches: i64,
     pub elapsed: Duration,
     pub eta: DateTime<Utc>
 }
@@ -25,8 +52,8 @@ pub struct ProgressNotification {
 #[derive(Debug, Clone)]
 pub struct FinishNotification {
     pub topic: String,
-    pub matches: u32,
-    pub read: u32,
+    pub matches: i64,
+    pub read: i64,
     pub elapsed: Duration,
     pub read_rate_msg_sec: f64
 }
@@ -35,9 +62,9 @@ pub struct FinishNotification {
 impl Display for ProgressNotification {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "\t topic = {}", self.topic)?;
-        writeln!(f, "\t progress = {:.2}%", self.overall_progress * 100.0)?;
+        writeln!(f, "\t progress = {:.2}%", self.overall_progress.rate * 100.0)?;
+        writeln!(f, "\t total read = {}", self.overall_progress.done)?;
         writeln!(f, "\t matches = {}", self.matches)?;
-        writeln!(f, "\t total read = {}", self.read)?;
         writeln!(f, "\t elapsed = {} seconds", self.elapsed.num_seconds())?;
         writeln!(f, "\t eta = {}", self.eta)
     }
@@ -53,4 +80,16 @@ impl Display for FinishNotification {
     }
 }
 
+impl Display for PreparationStep {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PreparationStep::CreateClient => write!(f, "Creating client"),
+            PreparationStep::FetchMetadata => write!(f, "Fetching topic metadata"),
+            PreparationStep::AssignPartitions => write!(f, "Assigning partitions"),
+            PreparationStep::OffsetsForTime => write!(f, "Fetching offsets for search bounds"),
+            PreparationStep::FetchWatermarks => write!(f, "Fetching topic watermarks (min/max)"),
+            PreparationStep::SeekPartitions => write!(f, "Seeking partitions to offsets"),
+        }
+    }
+}
 

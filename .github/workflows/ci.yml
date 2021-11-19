@@ -26,11 +26,12 @@ jobs:
         name: Prepare test environment (Kafka)
         run: docker-compose -f "docker-compose.yml" up -d --build
 
-      - id: install-tarpaulin
-        name: Install Cargo tarpaulin
-        run: cargo install cargo-tarpaulin
 
 # FIXME: cargo tarpaulin doesn't seem to work: using --all-targets says this option has been specified more than once, not using it results in 0 tests being run
+#      - id: install-tarpaulin
+#        name: Install Cargo tarpaulin
+#        run: cargo install cargo-tarpaulin
+#
 #      - id: test-coverage
 #        name: Run tests with coverage
 #        run: cargo tarpaulin --verbose --all-targets --all-features --no-fail-fast --out Xml
@@ -43,6 +44,8 @@ jobs:
 
       - id: test
         name: Test all targets
+        env:
+          RUST_BACKTRACE: 1
         run: cargo test --all --all-features --all-targets -- --nocapture
 
       - id: teardown
