@@ -1,9 +1,12 @@
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{LineWriter, Write};
 use std::path::Path;
 use chrono::{DateTime, Duration as ChronoDuration, TimeZone, Utc};
 use clap::Parser;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rdkafka::Message;
+use rdkafka::message::OwnedMessage;
 // use rdkafka::Message;
 use tokio::sync::mpsc::Receiver;
 use buska_core::config::KafkaClusterConfig;
@@ -92,8 +95,16 @@ struct BuskaCli {
     #[clap(short, long)]
     topic: String,
 
+    /// Where to output matching records, can be `stdout` or any file path
+    #[clap(short, long)]
+    out: String,
 }
 
+#[derive(PartialEq)]
+enum Out {
+    Stdout,
+    File(String)
+}
 
 #[tokio::main]
 async fn main() {
@@ -106,11 +117,16 @@ async fn main() {
     let cluster_config = extract_cluster_config(&cli);
     let (sender, receiver) = tokio::sync::mpsc::channel::<SearchNotification>(1024);
 
-
+    let out =
+        if cli.out.to_lowercase() == "stdout" {
+            Out::Stdout
+        } else {
+            Out::File(cli.out.clone())
+        };
     let mut tasks = vec![];
     // Launch the loop that will listen to search notifications and print the result to stdout
     tasks.push(tokio::task::spawn(async move {
-        cli_notifications_loop(receiver, unbounded).await;
+        cli_notifications_loop(receiver, unbounded, out).await;
     }));
 
     // Launch the Search process with the appropriate options extracted from user-inputs
@@ -212,10 +228,12 @@ fn extract_search_bounds(cli: &BuskaCli) -> SearchBounds {
 }
 
 /// Listens to search notifications and prints those to stdout
-async fn cli_notifications_loop(mut receiver: Receiver<SearchNotification>, unbounded: bool) {
+async fn cli_notifications_loop(mut receiver: Receiver<SearchNotification>, unbounded: bool, out: Out) {
     let mut stop = false;
     let mut bars: Option<HashMap<i32, ProgressBar>> = None;
     let mut step = 0;
+    let mut writer: Option<LineWriter<File>> = None;
+    let mut matches: Vec<OwnedMessage> = vec![];
     while !stop {
         if let Some(received) = receiver.recv().await {
             match received {
@@ -234,6 +252,16 @@ async fn cli_notifications_loop(mut receiver: Receiver<SearchNotification>, unbo
                     }
                     println!("Finished searching. Summary:");
                     println!("{}", summary);
+                    if summary.matches > 0 && out == Out::Stdout {
+                        println!("Matches:");
+                        for matched in &matches {
+                            println!("{}",
+                                     matched.payload_view::<str>()
+                                         .expect("Could not display matched record as string")
+                                         .expect("Could not display matched record as string")
+                            );
+                        }
+                    }
                 },
                 SearchNotification::Progress(progress) => {
                     if !unbounded { // can't display a progress bar if running infinitely
@@ -252,12 +280,31 @@ async fn cli_notifications_loop(mut receiver: Receiver<SearchNotification>, unbo
                     }
                 },
                 SearchNotification::Match(matched) => {
-                    println!("Match found:");
-                    println!("{}",
-                             matched.payload_view::<str>()
-                                 .expect("Could not display matched record as string")
-                                 .expect("Could not display matched record as string")
-                    );
+                    match out {
+                        Out::Stdout => {
+                            println!("Match found:");
+                            println!("{}",
+                                     matched.payload_view::<str>()
+                                         .expect("Could not display matched record as string")
+                                         .expect("Could not display matched record as string")
+                            );
+                            matches.push(matched.clone())
+                        },
+                        Out::File(ref path) => {
+                            if writer.as_ref().is_none() {
+                                let file = File::create(path).expect("Could not create out file");
+                                writer = Some(LineWriter::new(file));
+                            }
+                            writer.as_mut()
+                                .unwrap()
+                                .write_all(
+                                      matched.payload_view::<str>()
+                                        .expect("Could not display matched record as string")
+                                        .expect("Could not display matched record as string")
+                                          .as_bytes()
+                            ).expect("Could not write match to out file");
+                        }
+                    }
                 }
             }
         }
