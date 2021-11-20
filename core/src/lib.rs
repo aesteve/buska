@@ -274,8 +274,8 @@ mod tests {
     use quickcheck::{Arbitrary, Gen};
 
     use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
-    use rdkafka::{ClientConfig, Timestamp};
-    use rdkafka::message::OwnedMessage;
+    use rdkafka::{ClientConfig, Message, Timestamp};
+    use rdkafka::message::{Headers, OwnedHeaders, OwnedMessage};
     use rdkafka::producer::{FutureProducer, FutureRecord};
     use serde::{Serialize, Deserialize};
     use serde_json::to_string;
@@ -410,6 +410,79 @@ mod tests {
     #[derive(Debug, Clone)]
     pub(crate) struct TestMessage(pub(crate) OwnedMessage);
 
+    /// A few utility methods
+    impl TestMessage {
+        pub(crate) fn without_key(&self) -> OwnedMessage {
+            OwnedMessage::new(
+                self.0.payload().map(|v| v.to_vec()),
+                None,
+                self.0.topic().to_string(),
+                self.0.timestamp(),
+                self.0.partition(),
+                self.0.offset(),
+                self.0.headers().cloned()
+            )
+        }
+
+        pub(crate) fn without_headers(&self) -> OwnedMessage {
+            OwnedMessage::new(
+                self.0.payload().map(|v| v.to_vec()),
+                self.0.key().map(|v| v.to_vec()),
+                self.0.topic().to_string(),
+                self.0.timestamp(),
+                self.0.partition(),
+                self.0.offset(),
+                None
+            )
+        }
+
+        pub(crate) fn without_payload(&self) -> OwnedMessage {
+            OwnedMessage::new(
+                None,
+                self.0.key().map(|v| v.to_vec()),
+                self.0.topic().to_string(),
+                self.0.timestamp(),
+                self.0.partition(),
+                self.0.offset(),
+                None
+            )
+        }
+
+        pub(crate) fn withbytes_payload(&self, payload: &[u8]) -> OwnedMessage {
+            OwnedMessage::new(
+                Some(payload.to_vec()),
+                self.0.key().map(|v| v.to_vec()),
+                self.0.topic().to_string(),
+                self.0.timestamp(),
+                self.0.partition(),
+                self.0.offset(),
+                None
+            )
+        }
+
+
+
+        pub(crate) fn add_header(&self, name: &str, value: &str) -> OwnedMessage {
+            let headers =  match self.0.headers().cloned().as_mut() {
+                Some(h) =>
+                    copy_headers(h)
+                        .add(name, value),
+                _ =>
+                    OwnedHeaders::new_with_capacity(1)
+                        .add(name, value)
+            };
+            OwnedMessage::new(
+                self.0.payload().map(|v| v.to_vec()),
+                self.0.key().map(|v| v.to_vec()),
+                self.0.topic().to_string(),
+                self.0.timestamp(),
+                self.0.partition(),
+                self.0.offset(),
+                Some(headers)
+            )
+        }
+    }
+
 
     fn rand_timestamp(g: &mut Gen) -> Timestamp {
         let timestamps = &[
@@ -441,6 +514,16 @@ mod tests {
                 None
             ))
         }
+    }
+
+    fn copy_headers(h: &OwnedHeaders) -> OwnedHeaders {
+        let c = h.count();
+        let mut res = OwnedHeaders::new_with_capacity(c);
+        for i in 0..c {
+            let header = h.get(i).expect("Could not extract header by index");
+            res = res.add(header.0, header.1);
+        }
+        res
     }
 
 

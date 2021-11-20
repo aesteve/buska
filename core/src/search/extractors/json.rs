@@ -7,6 +7,7 @@ use jsonpath_rust::JsonPathFinder;
 use rdkafka::Message;
 use rdkafka::message::OwnedMessage;
 use serde_json::Value;
+use crate::search::extractors::ExtractResult;
 use crate::search::MsgExtractor;
 
 pub fn json_single_extract(path: &str) -> Result<JsonPathSingleExtract, String> {
@@ -31,7 +32,7 @@ pub struct JsonPathMultiExtract {
 }
 
 impl MsgExtractor<Value> for JsonPathSingleExtract {
-    fn extract(&mut self, msg: &OwnedMessage) -> Result<Option<Value>, String> {
+    fn extract(&mut self, msg: &OwnedMessage) -> ExtractResult<Value> {
         let finder = &mut self.path;
         match msg.payload_view::<str>() {
             None => Ok(None),
@@ -53,7 +54,7 @@ impl MsgExtractor<Value> for JsonPathSingleExtract {
 }
 
 impl MsgExtractor<Vec<Value>> for JsonPathMultiExtract {
-    fn extract(&mut self, msg: &OwnedMessage) -> Result<Option<Vec<Value>>, String> {
+    fn extract(&mut self, msg: &OwnedMessage) -> ExtractResult<Vec<Value>> {
         let finder = &mut self.path;
         match msg.payload_view::<str>() {
             None => Ok(None),

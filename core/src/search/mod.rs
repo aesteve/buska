@@ -1,6 +1,7 @@
 use rdkafka::message::OwnedMessage;
 
 use std::marker::PhantomData;
+use crate::search::extractors::ExtractResult;
 
 pub mod bounds;
 pub mod extractors;
@@ -12,7 +13,7 @@ pub trait Predicate<T> {
 }
 
 pub trait MsgExtractor<T> {
-    fn extract(&mut self, msg: &OwnedMessage) -> Result<Option<T>, String>;
+    fn extract(&mut self, msg: &OwnedMessage) -> ExtractResult<T>;
 }
 
 pub struct SearchDefinition<V, E, P>
