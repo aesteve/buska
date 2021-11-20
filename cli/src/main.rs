@@ -17,7 +17,7 @@ use buska_core::search::extractors::json::json_single_extract;
 use buska_core::search::extractors::key::KeyExtractor;
 use buska_core::search::notifications::{ProgressNotification, SearchNotification};
 use buska_core::search::{Predicate, SearchDefinition};
-use buska_core::search::matchers::{OneOf, PerfectMatch};
+use buska_core::search::matchers::{OneOf, PerfectMatch, RegexMatch};
 use buska_core::search_topic;
 
 
@@ -31,7 +31,7 @@ use buska_core::search_topic;
 ///      - when should we stop searching? (--to-current-last, --to-epoch-millis=1636308199000, --to-iso_8601=2021-11-07T19:03:55+0100)
 ///   - What are we looking for
 ///     - How do we extract the information from a Kafka record (--extract-header=the_header, --extract-value-json-path=$.somefield.someother)
-///     - What do we match against? (--matches-exactly=some_value)
+///     - What do we match against? (--matches-exactly=some_value  --matches-one-of=foo,bar,baz  --matches-regex=[0-9]+)
 ///     - The topic we should search in: --topic
 ///
 /// A full valid example could be:
@@ -39,6 +39,9 @@ use buska_core::search_topic;
 ///
 /// Another one:
 ///   buska --cluster-config-file=/opt/secrets/cluster.toml --from-iso-8601=2021-11-07T00:00:00+0100 --to-iso-8601=2021-11-08T00:00:00+0100 --extract-value-json-path=$.somefield.nested --matches-exactly=valueWereLookingFor
+///
+/// Another one:
+///   buska --bootstrap-servers localhost:9092 --from-beginning --to-current-last --extract-key=true --matches-regex=prefix_.*
 ///
 #[derive(Clone, Parser, Debug)]
 #[clap(version = "0.0.1", author = "Arnaud Esteve <arnaud.esteve@gmail.com>")]
@@ -80,7 +83,7 @@ struct BuskaCli {
     extract_header: Option<String>,
     /// Extract a header by its name for matching
     #[clap(short, long)]
-    extract_key: Option<String>,
+    extract_key: Option<bool>,
     /// Extract a single part of the record's value by using a JSON path definition for matching (if JSON path extracts an array, returns the first one: use value_json_path_array)
     #[clap(short, long)]
     extract_value_json_path: Option<String>,
@@ -88,6 +91,10 @@ struct BuskaCli {
     /// Matches the extracted value from a record against a specific value
     #[clap(short, long)]
     matches_exactly: Option<String>,
+
+    /// Matches the extracted value (must be a String) from a record against a regular expression
+    #[clap(short, long)]
+    matches_regex: Option<String>,
 
     /// Matches one of the values from this comma-separated list of string
     #[clap(short, long)]
@@ -134,16 +141,22 @@ async fn main() {
     }));
 
     // Launch the Search process with the appropriate options extracted from user-inputs
-    let matcher: Box<SizedPredicate<String>> = match (cli.matches_exactly.clone(), cli.matches_one_of.clone()) {
-        (Some(perfect_match), _) =>
+    let matcher: Box<SizedPredicate<String>> = match (
+        cli.matches_exactly.clone(),
+        cli.matches_one_of.clone(),
+        cli.matches_regex.clone()
+    ) {
+        (Some(perfect_match), _, _) =>
             Box::new(PerfectMatch::new(perfect_match)),
-        (_, Some(one_of)) =>
+        (_, Some(one_of), _) =>
             Box::new(
-                OneOf::new(one_of.split(",")
+                OneOf::new(one_of.split(',')
                 .into_iter()
                 .map(|s| s.to_string())
                 .collect::<Vec<String>>())
             ),
+        (_, _, Some(regexp)) =>
+            Box::new(RegexMatch::new(&regexp).expect("Could not create regular expression")),
         _ => panic!("No matcher specified. Expecting: --matches-exactly, or --matches-one-of")
     };
     if let Some(header_name) = cli.extract_header.as_ref() {
@@ -160,7 +173,7 @@ async fn main() {
         }));
     } else if let Some(key) = cli.extract_key {
         tasks.push(tokio::task::spawn(async move {
-            let extractor = KeyExtractor { key };
+            let extractor = KeyExtractor::default();
             search_topic(
                 cluster_config,
                 cli.topic,
@@ -173,13 +186,19 @@ async fn main() {
     } else if let Some(path) = cli.extract_value_json_path {
         tasks.push(tokio::task::spawn(async move {
             let extractor = json_single_extract(&path).expect("JSON path specified through --value-json-path may be an invalid");
-            let matcher: Box<SizedPredicate<Value>> = match (cli.matches_exactly, cli.matches_one_of) {
-                (Some(perfect_match), _) =>
+            let matcher: Box<SizedPredicate<Value>> = match (
+                cli.matches_exactly,
+                cli.matches_one_of,
+                cli.matches_regex
+            ) {
+                (Some(perfect_match), _, _) =>
                     Box::new(PerfectMatch::new(serde_json::json!(perfect_match))),
-                (_, Some(one_of)) => {
+                (_, Some(one_of), _) => {
                     let jsons: Vec<Value> = one_of.split(",").into_iter().map(|s| serde_json::json!(s.to_string())).collect();
                     Box::new(OneOf::new(jsons))
                 },
+                (_, _, Some(regexp)) =>
+                    Box::new(RegexMatch::new(&regexp).expect("Could not create regular expression")),
                 _ => panic!("No matcher specified. Expecting: --matches-exactly, or --matches-one-of")
             };
             search_topic(

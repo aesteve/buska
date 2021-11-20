@@ -8,7 +8,7 @@ pub mod extractors;
 pub mod matchers;
 pub mod notifications;
 
-pub trait Predicate<T> {
+pub trait Predicate<T: ?Sized> {
     fn matches(&mut self, t: &T) -> bool;
 }
 
