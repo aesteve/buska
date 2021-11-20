@@ -12,7 +12,7 @@ pub trait Predicate<T> {
 }
 
 pub trait MsgExtractor<T> {
-    fn extract(&mut self, msg: &OwnedMessage) -> Option<T>;
+    fn extract(&mut self, msg: &OwnedMessage) -> Result<Option<T>, String>;
 }
 
 pub struct SearchDefinition<V, E, P>
@@ -40,9 +40,10 @@ where E: MsgExtractor<V>,
       P: Predicate<V> {
     fn matches(&mut self, msg: &OwnedMessage) -> bool {
         match self.extractor.extract(msg) {
-            None => false,
-            Some(extracted) =>
-                self.matcher.matches(&extracted)
+            Ok(Some(extracted)) =>
+                self.matcher.matches(&extracted),
+            _ =>
+                false
         }
     }
 }

@@ -5,10 +5,11 @@ use crate::search::MsgExtractor;
 pub struct PayloadStringExtractor {}
 
 impl MsgExtractor<String> for PayloadStringExtractor {
-    fn extract(&mut self, msg: &OwnedMessage) -> Option<String> {
+    fn extract(&mut self, msg: &OwnedMessage) -> Result<Option<String>, String> {
         match msg.payload_view::<str>() {
-            Some(Ok(payload)) => Some(payload.to_string()),
-            _ => None
+            Some(Err(e)) => Err(format!("Could not extract payload as string. {}", e)),
+            Some(Ok(payload)) => Ok(Some(payload.to_string())),
+            None => Ok(None),
         }
     }
 }

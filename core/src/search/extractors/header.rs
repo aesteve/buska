@@ -12,17 +12,20 @@ pub struct HeaderStringExtractor {
 }
 
 impl MsgExtractor<String> for HeaderStringExtractor {
-    fn extract(&mut self, msg: &OwnedMessage) -> Option<String> {
-        msg.headers().and_then(|headers| {
-            for idx in 0..headers.count() {
-                if let Some((name, Ok(value))) = headers.get_as::<str>(idx) {
-                    if name == self.name {
-                        return Some(value.to_string())
+    fn extract(&mut self, msg: &OwnedMessage) -> Result<Option<String>, String> {
+        match msg.headers() {
+            None => Ok(None),
+            Some(headers) => {
+                for idx in 0..headers.count() {
+                    if let Some((name, Ok(value))) = headers.get_as::<str>(idx) {
+                        if name == self.name {
+                            return Ok(Some(value.to_string()))
+                        }
                     }
                 }
+                Ok(None)
             }
-            None
-        })
+        }
     }
 }
 
@@ -45,7 +48,8 @@ mod tests {
     #[quickcheck]
     fn extracting_from_a_message_with_no_headers_should_return_none_and_never_fail(msg: TestMessage, mut extractor: HeaderStringExtractor) {
         let msg = msg.0;
-        assert!(extractor.extract(&msg).is_none());
+        assert!(extractor.extract(&msg).is_ok(), "Extracting from the message should never fail");
+        assert!(extractor.extract(&msg).unwrap().is_none(), "Extracting from the message without headers should return None");
     }
 
     #[quickcheck]
@@ -70,7 +74,7 @@ mod tests {
             msg.0.offset(),
             Some(headers)
         ) ;
-        assert_eq!(extractor.extract(&msg), Some(expected_value.to_string()));
+        assert_eq!(extractor.extract(&msg), Ok(Some(expected_value.to_string())));
     }
 
 

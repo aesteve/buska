@@ -31,37 +31,41 @@ pub struct JsonPathMultiExtract {
 }
 
 impl MsgExtractor<Value> for JsonPathSingleExtract {
-    fn extract(&mut self, msg: &OwnedMessage) -> Option<Value> {
+    fn extract(&mut self, msg: &OwnedMessage) -> Result<Option<Value>, String> {
         let finder = &mut self.path;
         match msg.payload_view::<str>() {
+            None => Ok(None),
+            Some(Err(e)) => Err(e.to_string()),
             Some(Ok(json)) => {
                 if let Ok(value) = serde_json::from_str::<Value>(json) {
                     finder.set_json(value);
                     let found = finder.find(); // returns a JSON array
-                    found.as_array()
-                        .and_then(|values| values.first().cloned())
+                    let matched = found
+                        .as_array()
+                        .and_then(|values| values.first().cloned());
+                    Ok(matched)
                 } else {
-                    None
+                    Ok(None)
                 }
-            },
-            _ => None,
+            }
         }
     }
 }
 
 impl MsgExtractor<Vec<Value>> for JsonPathMultiExtract {
-    fn extract(&mut self, msg: &OwnedMessage) -> Option<Vec<Value>> {
+    fn extract(&mut self, msg: &OwnedMessage) -> Result<Option<Vec<Value>>, String> {
         let finder = &mut self.path;
         match msg.payload_view::<str>() {
+            None => Ok(None),
+            Some(Err(e)) => Err(e.to_string()),
             Some(Ok(json)) => {
                 if let Ok(value) = serde_json::from_str::<Value>(json) {
                     finder.set_json(value);
-                    Some(finder.find_slice().into_iter().cloned().collect())
+                    Ok(Some(finder.find_slice().into_iter().cloned().collect()))
                 } else {
-                    None
+                    Ok(None)
                 }
             },
-            _ => None,
         }
     }
 }
@@ -97,7 +101,7 @@ mod tests {
         };
         let json_payload = Some(serde_json::to_string(&payload).expect("Could not serialize test record").into_bytes());
         let record = OwnedMessage::new(json_payload, Some(key.as_bytes().to_vec()), "topic".to_string(), Timestamp::CreateTime(Utc::now().timestamp_millis()), 0, 0, None);
-        assert_eq!(extractor.extract(&record), Some(serde_json::json!(i)));
+        assert_eq!(extractor.extract(&record), Ok(Some(serde_json::json!(i))));
     }
 
 
@@ -117,7 +121,7 @@ mod tests {
         };
         let json_payload = Some(serde_json::to_string(&payload).expect("Could not serialize test record").into_bytes());
         let record = OwnedMessage::new(json_payload, Some(key.as_bytes().to_vec()), "topic".to_string(), Timestamp::CreateTime(Utc::now().timestamp_millis()), 0, 0, None);
-        assert_eq!(extractor.extract(&record), Some(serde_json::json!(vec![i, i+1])));
+        assert_eq!(extractor.extract(&record), Ok(Some(serde_json::json!(vec![i, i+1]))));
     }
 
 
