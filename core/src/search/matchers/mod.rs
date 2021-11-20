@@ -37,7 +37,12 @@ mod tests {
 
     use quickcheck_macros::quickcheck;
     use crate::Predicate;
-    use crate::search::matchers::OneOf;
+    use crate::search::matchers::{OneOf, PerfectMatch};
+
+    #[quickcheck]
+    fn perfectly_matches_itself(itself: String) {
+        assert!(PerfectMatch::new(itself.clone()).matches(&itself));
+    }
 
     #[quickcheck]
     fn empty_vec_never_matches(any_string: String) {
