@@ -19,3 +19,5 @@ futures = "0.3"
 
 # README: "dependency management" (i.e. defining common dependency versions at root level)
 [dev-dependencies]
+quickcheck = "1.0"
+quickcheck_macros = "1.0"

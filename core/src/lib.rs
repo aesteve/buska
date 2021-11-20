@@ -271,9 +271,11 @@ fn create_client(conf: &KafkaClusterConfig) -> StreamConsumer {
 mod tests {
     use std::time::Duration;
     use chrono::Utc;
+    use quickcheck::{Arbitrary, Gen};
 
     use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
-    use rdkafka::ClientConfig;
+    use rdkafka::{ClientConfig, Timestamp};
+    use rdkafka::message::OwnedMessage;
     use rdkafka::producer::{FutureProducer, FutureRecord};
     use serde::{Serialize, Deserialize};
     use serde_json::to_string;
@@ -397,5 +399,49 @@ mod tests {
         }
         notifications
     }
+
+
+    // Property-Based Testing
+    // Some of our tests are not "example-based", some are in the form of: "no matter what input, [...] should happen"
+    // For this kind of tests we are using quickcheck
+    // This part of the module contains generators / shrinkers for rust-rdkafka
+
+    /// We can't `impl Arbitrary for OwnedMessage` since these are 2 types we don't own, thus the use of a custom test type
+    #[derive(Debug, Clone)]
+    pub(crate) struct TestMessage(pub(crate) OwnedMessage);
+
+
+    fn rand_timestamp(g: &mut Gen) -> Timestamp {
+        let timestamps = &[
+            Timestamp::NotAvailable,
+            Timestamp::CreateTime(i64::arbitrary(g)),
+            Timestamp::LogAppendTime(i64::arbitrary(g))
+        ];
+        *g.choose(timestamps).unwrap()
+    }
+
+    /// In our tests using the `#[quickcheck]` macro we will be using `TestMessage` as method parameter
+    /// From there we will be able to destructure it and get the message using:
+    /// ```rust
+    /// #[quickcheck]
+    /// fn some_test(msg: TestMessage) {
+    ///   let kafka_msg = msg.0;
+    ///   // => test kafka_msg
+    /// }
+    /// ```
+    impl Arbitrary for TestMessage {
+        fn arbitrary(g: &mut Gen) -> Self {
+            TestMessage(OwnedMessage::new(
+                Option::arbitrary(g),
+                Option::arbitrary(g),
+                String::arbitrary(g),
+                rand_timestamp(g),
+                i32::arbitrary(g),
+                i64::arbitrary(g),
+                None
+            ))
+        }
+    }
+
 
 }

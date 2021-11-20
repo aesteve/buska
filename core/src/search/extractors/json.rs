@@ -123,7 +123,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_single_match_from_kafka() {
-        env_logger::builder().is_test(true).init();
         let topic = "some_topic";
         prepare(topic).await;
         let records = (1..1000)
