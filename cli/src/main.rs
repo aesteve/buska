@@ -7,16 +7,17 @@ use clap::Parser;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rdkafka::Message;
 use rdkafka::message::OwnedMessage;
+use serde_json::Value;
 // use rdkafka::Message;
 use tokio::sync::mpsc::Receiver;
 use buska_core::config::KafkaClusterConfig;
 use buska_core::search::bounds::{SearchBounds, SearchEnd, SearchStart};
 use buska_core::search::extractors::header::HeaderStringExtractor;
-use buska_core::search::extractors::json::{json_multi_extract, json_single_extract};
+use buska_core::search::extractors::json::json_single_extract;
 use buska_core::search::extractors::key::KeyExtractor;
 use buska_core::search::notifications::{ProgressNotification, SearchNotification};
-use buska_core::search::SearchDefinition;
-use buska_core::search::matchers::PerfectMatch;
+use buska_core::search::{Predicate, SearchDefinition};
+use buska_core::search::matchers::{OneOf, PerfectMatch};
 use buska_core::search_topic;
 
 
@@ -83,13 +84,14 @@ struct BuskaCli {
     /// Extract a single part of the record's value by using a JSON path definition for matching (if JSON path extracts an array, returns the first one: use value_json_path_array)
     #[clap(short, long)]
     extract_value_json_path: Option<String>,
-    /// Extract multiple JSON values out of the record's value by using a JSON path definition for matching, will extract a JSON array
-    #[clap(short, long)]
-    extract_value_json_path_array: Option<String>,
 
     /// Matches the extracted value from a record against a specific value
     #[clap(short, long)]
-    matches_exactly: String,
+    matches_exactly: Option<String>,
+
+    /// Matches one of the values from this comma-separated list of string
+    #[clap(short, long)]
+    matches_one_of: Option<String>,
 
     /// The name of the topic we should search records in
     #[clap(short, long)]
@@ -105,6 +107,8 @@ enum Out {
     Stdout,
     File(String)
 }
+
+type SizedPredicate<T> = dyn Predicate<T> + Send;
 
 #[tokio::main]
 async fn main() {
@@ -130,9 +134,20 @@ async fn main() {
     }));
 
     // Launch the Search process with the appropriate options extracted from user-inputs
+    let matcher: Box<SizedPredicate<String>> = match (cli.matches_exactly.clone(), cli.matches_one_of.clone()) {
+        (Some(perfect_match), _) =>
+            Box::new(PerfectMatch::new(perfect_match)),
+        (_, Some(one_of)) =>
+            Box::new(
+                OneOf::new(one_of.split(",")
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<String>>())
+            ),
+        _ => panic!("No matcher specified. Expecting: --matches-exactly, or --matches-one-of")
+    };
     if let Some(header_name) = cli.extract_header.as_ref() {
         let extractor = HeaderStringExtractor { name: header_name.clone() };
-        let matcher = PerfectMatch::new(cli.matches_exactly.to_string());
         tasks.push(tokio::task::spawn(async move {
             search_topic(
                 cluster_config,
@@ -145,7 +160,6 @@ async fn main() {
         }));
     } else if let Some(key) = cli.extract_key {
         tasks.push(tokio::task::spawn(async move {
-            let matcher = PerfectMatch::new(cli.matches_exactly);
             let extractor = KeyExtractor { key };
             search_topic(
                 cluster_config,
@@ -158,21 +172,16 @@ async fn main() {
         }))
     } else if let Some(path) = cli.extract_value_json_path {
         tasks.push(tokio::task::spawn(async move {
-            let matcher = PerfectMatch::new(serde_json::json!(cli.matches_exactly));
             let extractor = json_single_extract(&path).expect("JSON path specified through --value-json-path may be an invalid");
-            search_topic(
-                cluster_config,
-                cli.topic,
-                sender,
-                bounds,
-                &mut SearchDefinition::new(extractor, matcher),
-                display_every
-            ).await;
-        }))
-    } else if let Some(path) = cli.extract_value_json_path_array {
-        tasks.push(tokio::task::spawn(async move {
-            let matcher = PerfectMatch::new(vec![serde_json::json!(cli.matches_exactly)]);
-            let extractor = json_multi_extract(&path).expect("JSON path specified through --value-json-path may be an invalid");
+            let matcher: Box<SizedPredicate<Value>> = match (cli.matches_exactly, cli.matches_one_of) {
+                (Some(perfect_match), _) =>
+                    Box::new(PerfectMatch::new(serde_json::json!(perfect_match))),
+                (_, Some(one_of)) => {
+                    let jsons: Vec<Value> = one_of.split(",").into_iter().map(|s| serde_json::json!(s.to_string())).collect();
+                    Box::new(OneOf::new(jsons))
+                },
+                _ => panic!("No matcher specified. Expecting: --matches-exactly, or --matches-one-of")
+            };
             search_topic(
                 cluster_config,
                 cli.topic,

@@ -152,7 +152,7 @@ mod tests {
             tokio::task::spawn(async move {
                 let extractor = json_single_extract("$.nested.int").expect("Could not create JSON path");
                 let matcher = PerfectMatch::new(serde_json::json!(4));
-                let mut search_definition = SearchDefinition::new(extractor, matcher);
+                let mut search_definition = SearchDefinition::new(extractor, Box::new(matcher));
                 search_topic(conf, topic.to_string(), sender, bounds, &mut search_definition, Duration::milliseconds(1)).await;
                 vec![]
             })

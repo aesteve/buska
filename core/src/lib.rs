@@ -25,7 +25,7 @@ use tokio::sync::mpsc::Sender;
 ///   - within some search bounds (start / end)
 ///   - matching some kind of record's predicate
 /// And sends notifications (including the search results) over a mpsc channel
-pub async fn search_topic<T: Predicate<OwnedMessage> + Send>(
+pub async fn search_topic<T: Predicate<OwnedMessage> + Send + ?Sized>(
     conf: KafkaClusterConfig,
     topic: String,
     sender: Sender<SearchNotification>,

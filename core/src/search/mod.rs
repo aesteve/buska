@@ -18,27 +18,28 @@ pub trait MsgExtractor<T> {
 
 pub struct SearchDefinition<V, E, P>
 where E: MsgExtractor<V>,
-      P: Predicate<V> {
+      P: Predicate<V> + ?Sized {
     extractor: E,
-    matcher: P,
+    matcher: Box<P>,
     phantom: PhantomData<V>
 }
 
 impl <V, E, P> SearchDefinition<V, E, P>
 where E: MsgExtractor<V>,
-      P: Predicate<V> {
-    pub fn new(extractor: E, matcher: P) -> SearchDefinition<V, E, P> {
+      P: Predicate<V> + ?Sized {
+    pub fn new(extractor: E, matcher: Box<P>) -> SearchDefinition<V, E, P> {
         SearchDefinition {
             extractor,
             matcher,
             phantom: PhantomData::default()
         }
     }
+
 }
 
 impl<V, E, P> Predicate<OwnedMessage> for SearchDefinition<V, E, P>
 where E: MsgExtractor<V>,
-      P: Predicate<V> {
+      P: Predicate<V> +?Sized {
     fn matches(&mut self, msg: &OwnedMessage) -> bool {
         match self.extractor.extract(msg) {
             Ok(Some(extracted)) =>
