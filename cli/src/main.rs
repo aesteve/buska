@@ -171,7 +171,7 @@ async fn main() {
                 display_every
             ).await
         }));
-    } else if let Some(key) = cli.extract_key {
+    } else if cli.extract_key.is_some() {
         tasks.push(tokio::task::spawn(async move {
             let extractor = KeyExtractor::default();
             search_topic(
