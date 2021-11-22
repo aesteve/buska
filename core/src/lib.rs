@@ -346,18 +346,26 @@ mod tests {
 
     /// Utility method to write JSON TestRecords in a topic
     pub(crate) async fn produce_json_records(topic: &str, recs: &[TestRecord]) {
-        let producer = test_producer();
-        for rec in recs {
-            producer
-                .send(
-                    FutureRecord::to(topic)
-                        .key(&rec.key)
-                        .payload(&to_string(rec).expect("Could not serialize test record as JSON"))
-                    ,
-                    Duration::from_millis(100)
-                ).await
-                .expect("Could not produce test record");
+        let mut tasks = vec![];
+        for chunk in recs.chunks(1000) {
+            let t: String = topic.into();
+            let c = chunk.to_vec();
+            tasks.push(tokio::task::spawn(async move {
+                let producer = test_producer();
+                for rec in c {
+                    producer
+                        .send(
+                            FutureRecord::to(&t)
+                                .key(&rec.clone().key)
+                                .payload(&to_string(&rec.clone()).expect("Could not serialize test record as JSON"))
+                            ,
+                            Duration::from_millis(100)
+                        ).await
+                        .expect("Could not produce test record");
+                }
+            }));
         }
+        futures::future::join_all(tasks).await;
     }
 
     /// Given a topic name, sets a topic up in the test cluster
@@ -526,5 +534,18 @@ mod tests {
         res
     }
 
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_data_integration() {
+        let before = Utc::now();
+        let recs = (1..700000).into_iter().map(|i| TestRecord { key: format!("key-{}",i), nested: NestedTestRecord {
+            int: i,
+            ints: vec![i-1, i, i+1],
+            string: format!("some-{}", i)
+        }}).collect::<Vec<TestRecord>>();
+        produce_json_records("test", &recs).await;
+        println!("Elapsed: {:?}", Utc::now() - before);
+    }
 
 }
