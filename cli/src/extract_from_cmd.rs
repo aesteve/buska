@@ -73,10 +73,15 @@ pub(crate) fn perform_search(
                 cli.matches_one_of,
                 cli.matches_regex
             ) {
-                (Some(perfect_match), _, _) =>
-                    Box::new(PerfectMatch::new(serde_json::json!(perfect_match))),
+                (Some(perfect_match), _, _) => {
+                    if let Ok(value) = serde_json::from_str(&*perfect_match) { // let the user input a JSON string like 1.0 <== should be a number, or [1, 2, 3] <== should be a JSON array of JSON numbers, etc.
+                        Box::new(PerfectMatch::new(value))
+                    } else { // it's not a stringified JSON, it's a pure String. Make it a JSON string value
+                        Box::new(PerfectMatch::new(serde_json::json!(perfect_match)))
+                    }
+                },
                 (_, Some(one_of), _) => {
-                    let jsons: Vec<Value> = one_of.split(",").into_iter().map(|s| serde_json::json!(s.to_string())).collect();
+                    let jsons: Vec<Value> = one_of.split(',').into_iter().map(|s| serde_json::json!(s.to_string())).collect();
                     Box::new(OneOf::new(jsons))
                 },
                 (_, _, Some(regexp)) =>
