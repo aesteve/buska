@@ -579,7 +579,6 @@ mod tests {
         //clean("test").await;
         //prepare("test", 60).await;
         let before = Utc::now();
-        // let range = 1..120;
         // let range = 1..1_000_000;
         // let range = 1_000_001..2_000_000;
         // let range = 2_000_001..3_000_000;
