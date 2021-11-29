@@ -25,10 +25,10 @@ pub(crate) async fn cli_notifications_loop(mut receiver: Receiver<SearchNotifica
             match received {
                 SearchNotification::Prepare(preparation) => {
                     step += 1;
-                    println!("[{}/7] {}", step, preparation);
+                    println!("[{}/5] {}", step, preparation);
                 },
                 SearchNotification::Start =>
-                    println!("[7/7] Searching"),
+                    println!("[5/5] Searching"),
                 SearchNotification::Finish(summary) => {
                     stop = true;
                     if let Some(b) = bars.as_mut() {

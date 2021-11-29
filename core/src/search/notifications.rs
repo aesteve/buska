@@ -16,8 +16,6 @@ pub enum SearchNotification {
 pub enum PreparationStep {
     CreateClient,
     FetchMetadata,
-    OffsetsForTime,
-    AssignPartitions,
     FetchWatermarks,
     SeekPartitions,
 }
@@ -58,6 +56,25 @@ pub struct FinishNotification {
     pub read_rate_msg_sec: f64
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct PartitionMsg {
+    pub(crate) partition: i32,
+    pub(crate) msg: OwnedMessage,
+    pub(crate) progress: Progress
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FinishPartitionNotification {
+    pub(crate) partition: i32,
+    pub(crate) progress: Progress,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum PartitionProgress {
+    Start,
+    Msg(PartitionMsg),
+    Finish(FinishPartitionNotification)
+}
 
 impl Display for ProgressNotification {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -84,11 +101,9 @@ impl Display for PreparationStep {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             PreparationStep::CreateClient => write!(f, "Creating client"),
-            PreparationStep::FetchMetadata => write!(f, "Fetching topic metadata"),
-            PreparationStep::AssignPartitions => write!(f, "Assigning partitions"),
-            PreparationStep::OffsetsForTime => write!(f, "Fetching offsets for search bounds"),
-            PreparationStep::FetchWatermarks => write!(f, "Fetching topic watermarks (min/max)"),
-            PreparationStep::SeekPartitions => write!(f, "Seeking partitions to offsets"),
+            PreparationStep::FetchMetadata => write!(f, "Fetching topic metadata (nb. of partitions)"),
+            PreparationStep::FetchWatermarks => write!(f, "Fetching topic watermarks (min/max offset per partition)"),
+            PreparationStep::SeekPartitions => write!(f, "Seeking partitions to desired offsets"),
         }
     }
 }
