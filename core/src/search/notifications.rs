@@ -35,6 +35,10 @@ impl Progress {
             rate: done as f64 / total as f64
         }
     }
+
+    pub fn is_finished(&self) -> bool {
+        self.done == self.total
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +78,26 @@ pub(crate) enum PartitionProgress {
     Start,
     Msg(PartitionMsg),
     Finish(FinishPartitionNotification)
+}
+
+impl FinishNotification {
+    pub fn new(topic: String, matches: i64, read: i64, elapsed: Duration) -> FinishNotification {
+        FinishNotification {
+            topic, matches, read, elapsed,
+            read_rate_msg_sec: (read as f64 / elapsed.num_milliseconds() as f64) * 1000.0 // using num_milliseconds *1000 avoids dividing by 0 if < 0.5seconds
+        }
+    }
+}
+
+impl PartitionProgress {
+    pub(crate) fn finished(partition: i32, total: i64) -> Self {
+        PartitionProgress::Finish(
+            FinishPartitionNotification {
+                partition,
+                progress: Progress::new(total, total)
+            }
+        )
+    }
 }
 
 impl Display for ProgressNotification {
