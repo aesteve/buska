@@ -2,23 +2,100 @@ pub mod config;
 pub mod search;
 pub mod utils;
 
+mod partition;
+
 use crate::search::Predicate;
 use crate::search::bounds::{SearchBounds, SearchEnd, SearchStart};
-use crate::search::notifications::{FinishNotification, PreparationStep, Progress, ProgressNotification, SearchNotification};
+use crate::search::notifications::{FinishNotification, PartitionMsg, PartitionProgress, PreparationStep, Progress, ProgressNotification, SearchNotification};
 
-use chrono::{Utc, Duration as ChronoDuration, TimeZone};
+use chrono::{Utc, Duration as ChronoDuration, TimeZone, DateTime};
 use config::KafkaClusterConfig;
-use rdkafka::{ClientConfig, TopicPartitionList, Offset as RdOffset, Message};
+use rdkafka::{ClientConfig, Offset as RdOffset, Offset};
 use rdkafka::config::RDKafkaLogLevel;
 use rdkafka::consumer::{Consumer, StreamConsumer};
-use rdkafka::error::{KafkaError, KafkaResult};
-use rdkafka::topic_partition_list::Offset::Offset;
+use rdkafka::error::KafkaResult;
 use rdkafka::util::Timeout;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 use rdkafka::message::OwnedMessage;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::task::JoinError;
+use crate::partition::{consume_partition, prepare_partition, seek_partition};
+
+type PreparedPartition = (StreamConsumer, i32, (Offset, i64));
+type PartitionPreparationResult = KafkaResult<PreparedPartition>;
+
+struct PerPartitionStatus {
+    progress: BTreeMap<i32, Progress>,
+    to_finish: HashSet<i32>,
+    start: DateTime<Utc>
+}
+
+impl PerPartitionStatus {
+    fn new(nb_partition: usize) -> Self {
+        PerPartitionStatus {
+            progress: BTreeMap::new(),
+            to_finish: HashSet::with_capacity(nb_partition),
+            start: Utc::now()
+        }
+    }
+
+    fn start(&mut self, part: i32, min: i64, max: i64) {
+        self.progress.insert(part, Progress::new(0, max - min));
+        self.to_finish.insert(part);
+    }
+
+    fn make_progress(&mut self, part: i32, progress: Progress) {
+        if progress.is_finished() {
+            self.to_finish.remove(&part);
+        }
+        self.progress.insert(part, progress);
+    }
+
+    fn progress(&self) -> Progress {
+        Progress::new(self.done(), self.total())
+    }
+
+    fn progress_notification(&self, topic: String, matches: i64) -> SearchNotification {
+        let overall_progress = self.progress();
+        let elapsed = Utc::now() - self.start;
+        let eta = if overall_progress.rate > 0.1 {
+            self.start + ChronoDuration::milliseconds((elapsed.num_milliseconds() as f64 / overall_progress.rate) as i64)
+        } else {
+            Utc.from_utc_datetime(&chrono::naive::MAX_DATETIME)
+        };
+        SearchNotification::Progress(
+            ProgressNotification {
+                topic,
+                overall_progress: self.progress(),
+                per_partition_progress: self.progress_per_partition(),
+                matches,
+                elapsed,
+                eta
+            }
+        )
+    }
+
+    fn total(&self) -> i64 {
+        self.progress.values().map(|p| p.total).sum()
+    }
+
+    fn done(&self) -> i64 {
+        self.progress
+            .values()
+            .map(|p| p.done)
+            .sum()
+    }
+
+    fn progress_per_partition(&self) -> BTreeMap<i32, Progress> {
+        self.progress.clone()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.to_finish.is_empty()
+    }
+}
 
 /// The main entry point of this library
 /// Searches a whole topic on a Kafka cluster (describe by its KafkaClusterConfig)
@@ -34,218 +111,54 @@ pub async fn search_topic<T: Predicate<OwnedMessage> + Send + ?Sized>(
     notify_every: ChronoDuration,
 ) {
     let search_start = Utc::now();
+    let loop_infinitely = bounds.end == SearchEnd::Unbounded;
     if let Err(e) = sender.send(SearchNotification::Prepare(PreparationStep::CreateClient)).await {
         log::error!("Could not send notification {}", e);
     }
     let consumer = create_client(&conf);
     log::debug!("Kafka consumer created in {} millis", (Utc::now() - search_start).num_milliseconds());
-    let loop_infinitely = bounds.end == SearchEnd::Unbounded;
-    let mut offset_range: HashMap<i32, (i64, i64)> = seek_partitions(conf.clone(), &consumer, &topic, &bounds, &sender).await
-        .expect("Could not seek partitions to desired offset")
-        .into_iter()
-        .filter(|(_, (_, max))| *max > 0)
-        .collect();
-    log::debug!("Offsets ranges to search = {:?}", offset_range);
-    let mut progress_per_partition = BTreeMap::new();
-    for (part, (min, max)) in &offset_range {
-        progress_per_partition.insert(*part, Progress::new(0, max - min));
+    let topic_metadata = fetch_topic_metadata(&consumer, &sender, &topic).await.expect("Could not fetch topic metadata");
+    let nb_partitions = topic_metadata.len();
+    let mut partition_status = PerPartitionStatus::new(nb_partitions);
+    if let Err(e) = sender.send(SearchNotification::Prepare(PreparationStep::FetchWatermarks)).await {
+        log::error!("Could not send notification {}", e);
     }
-    let mut matches = 0;
-    let mut read = 0;
-    let mut last_displayed = Utc::now();
-    sender.send(SearchNotification::Start).await.expect("Could not send start notification. Crashing");
-    let initial_notif = ProgressNotification {
-        topic: topic.clone(),
-        per_partition_progress: progress_per_partition.clone(),
-        overall_progress: Progress::new(0, offset_range.clone().values().map(|(min, max)| max - min).sum()),
-        matches,
-        elapsed: ChronoDuration::seconds(0),
-        eta: Utc::now() // dummy
-    };
-    sender.send(SearchNotification::Progress(initial_notif)).await.expect("Could not send first progress notification. Crashing");
-    while loop_infinitely || !offset_range.is_empty() {
-        match &consumer.recv().await {
-            Err(e) =>
-                log::error!("Kafka error while reading topic: {}", e),
-            Ok(m) => {
-                read += 1;
-                let msg = m.detach();
-                if predicate.matches(&msg) {
-                    matches += 1;
-                    let to_send = SearchNotification::Match(msg.clone());
-                    if let Err(e) = sender.send(to_send).await {
-                        log::error!("Could not forward matching msg: {:?}. {}", msg, e)
-                    }
-                }
-                if let Some((min, max)) = offset_range.get(&m.partition()) {
-                    if m.offset() >= *max - 1 {
-                        log::debug!("Reached end for partition {}", m.partition());
-                        let partition_total = *max - *min;
-                        let partition_progress = Progress::new(partition_total, partition_total);
-                        progress_per_partition.insert(m.partition(), partition_progress);
-                        offset_range.remove(&m.partition());
-                    } else {
-                        let partition_total = *max - *min;
-                        let partition_current = m.offset() - *min;
-                        let partition_progress = Progress::new(partition_current, partition_total);
-                        progress_per_partition.insert(m.partition(), partition_progress);
-                        if Utc::now() > last_displayed + notify_every {
-                            last_displayed = Utc::now();
-                            let total_to_read: i64 = progress_per_partition.values().map(|p| p.total).sum();
-                            let total_read: i64 = progress_per_partition.values().map(|p| p.done).sum();
-                            let overall_progress = Progress::new(total_read, total_to_read);
-                            let elapsed = Utc::now() - search_start;
-                            let eta = if overall_progress.rate > 0.1 {
-                                search_start + ChronoDuration::milliseconds((elapsed.num_milliseconds() as f64 / overall_progress.rate) as i64)
-                            } else {
-                                Utc.from_utc_datetime(&chrono::naive::MAX_DATETIME)
-                            };
-                            let to_send = ProgressNotification {
-                                topic: topic.to_string(),
-                                overall_progress,
-                                per_partition_progress: progress_per_partition.clone(),
-                                matches,
-                                elapsed: Utc::now() - search_start,
-                                eta
-                            };
-                            if let Err(e) = sender.send(SearchNotification::Progress(to_send)).await {
-                                log::error!("Could not send progress notification: {:?}", e)
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    let prepared = prepare_all_partitions(topic_metadata, &conf, topic.clone(), &bounds).await;
+    if let Err(e) = sender.send(SearchNotification::Prepare(PreparationStep::SeekPartitions)).await {
+        log::error!("Could not send notification {}", e);
     }
-    log::info!("Reached end of consumption. Sending end marker");
-    let elapsed = Utc::now() - search_start;
-    let notification = FinishNotification {
-        topic,
-        matches,
-        read,
-        elapsed,
-        read_rate_msg_sec: (read as f64 / elapsed.num_milliseconds() as f64) * 1000.0 // using num_milliseconds *1000 avoids dividing by 0 if < 0.5seconds
-    };
-    sender.send(SearchNotification::Finish(notification))
+    let (msg_sender, mut msg_receiver) = tokio::sync::mpsc::channel::<PartitionProgress>(1024);
+    for res in prepared {
+        seek_and_consume_partition(
+            topic.clone(),
+            &msg_sender,
+            res,
+            &mut partition_status,
+            loop_infinitely
+        );
+    }
+    sender.send(SearchNotification::Start)
+        .await
+        .expect("Could not send start notification. Crashing");
+    sender.send(partition_status.progress_notification(topic.clone(), 0))
+        .await
+        .expect("Could not send first progress notification. Crashing");
+    let (nb_read, nb_match) = wait_for_partitions(
+        &topic,
+        &mut msg_receiver, &sender,
+        &mut partition_status,
+        predicate,
+        notify_every
+    ).await;
+    log::debug!("Reached end of consumption. Sending end marker");
+    let search_duration = Utc::now() - search_start;
+    sender
+        .send(SearchNotification::Finish(FinishNotification::new(topic, nb_match, nb_read, search_duration)))
         .await
         .expect("Could not notify end of topic search, crashing");
 }
 
-/// Seek partitions for the given consumer / topic to the given bounds (start bounds)
-/// Returns a map of <partition, (min_offset, max_offset)> while:
-///     assigning the consumer to every partition,
-///     seeking the consumer to min_offset for every partition
-async fn seek_partitions(config: KafkaClusterConfig, consumer: &StreamConsumer, topic: &str, bounds: &SearchBounds, sender: &Sender<SearchNotification>) -> KafkaResult<HashMap<i32, (i64, i64)>> {
-    log::info!("Seeking partitions");
-    let start = Utc::now();
-    let loop_infinitely = bounds.end == SearchEnd::Unbounded;
-
-    // 1. Fetch metadata
-    let req_timeout = Timeout::After(Duration::from_secs(60));
-    if let Err(e) = sender.send(SearchNotification::Prepare(PreparationStep::FetchMetadata)).await {
-        log::error!("Could not send notification {}", e);
-    }
-
-    let metadata = consumer.fetch_metadata(Some(topic), req_timeout)?;
-    let partitions: Vec<i32> = metadata.topics()[0].partitions().iter().map(|part| part.id()).collect();
-    let nb_partitions = partitions.len();
-    let mut topic_partition_list = TopicPartitionList::with_capacity(nb_partitions);
-    for partition in partitions {
-        let mut part = topic_partition_list.add_partition(topic, partition);
-        if let SearchStart::Time(beginning) = bounds.start {
-            part.set_offset(Offset(beginning.timestamp_millis())).expect("Could not set offset");
-        }
-    }
-    // 2. Assign partitions to consumer
-    log::debug!("Assigning");
-    if let Err(e) = sender.send(SearchNotification::Prepare(PreparationStep::AssignPartitions)).await {
-        log::error!("Could not send notification {}", e);
-    }
-    consumer.assign(&topic_partition_list).expect("Could not assign partitions");
-
-    // 3. Fetch offsets for times if needed
-    log::debug!("Fetching offsets for time");
-    if let Err(e) = sender.send(SearchNotification::Prepare(PreparationStep::OffsetsForTime)).await {
-        log::error!("Could not send notification {}", e);
-    }
-    let partition_map: Vec<(String, i32)> = topic_partition_list
-        .to_topic_map()
-        .iter()
-        .map(|((topic, partition), _)| (topic.to_string(), *partition))
-        .collect();
-    let start_offsets: HashMap<i32, RdOffset> =
-        if let SearchStart::Time(_) = bounds.start {
-            let offsets = consumer.offsets_for_times(topic_partition_list, req_timeout).expect("Could not find offsets for time");
-            offsets.to_topic_map()
-                .into_iter()
-                .map(|((_, partition), offset)| (partition, offset))
-                .collect()
-        } else {
-            partition_map
-                .clone()
-                .iter()
-                .map(|(_, partition_id)| (*partition_id, RdOffset::Beginning))
-                .collect()
-        };
-
-    // 4. Fetch watermarks (min/max offset for partition)
-    log::debug!("Fetching watermarks");
-    if let Err(e) = sender.send(SearchNotification::Prepare(PreparationStep::FetchWatermarks)).await {
-        log::error!("Could not send notification {}", e);
-    }
-    let mut tasks = vec![];
-    for (topic, partition) in partition_map.clone() {
-        let conf = config.clone();
-        tasks.push(tokio::task::spawn(async move {
-            let consumer = create_client(&conf);
-            let (_, max_offset) = if !loop_infinitely {
-                log::info!("Fetching watermarks for partition {}", partition);
-                consumer.fetch_watermarks(&topic, partition, req_timeout).expect("Could not fetch watermarks for partition") // FIXME: fail the task?
-            } else {
-                (-1, -1)
-            };
-            (partition, max_offset)
-        }));
-    }
-
-
-    let mut partitions_min_max = HashMap::<i32, (i64, i64)>::with_capacity(nb_partitions);
-    for (partition, max) in (futures::future::join_all(tasks).await).into_iter().flatten() {
-        let min = start_offsets.get(&partition).expect("Could not find offset for partition");
-        partitions_min_max.insert(partition, (min.to_raw().unwrap(), max));
-    }
-
-    // 5. Seek partitions to proper offsets
-    log::debug!("Seeking partitions");
-    if let Err(e) = sender.send(SearchNotification::Prepare(PreparationStep::SeekPartitions)).await {
-        log::error!("Could not send notification {}", e);
-    }
-    for (topic, partition) in &partition_map {
-        let offset_to_seek = start_offsets[partition];
-        let mut nb_retries = 0;
-        let mut seeked = false;
-        let max_retries = 20;
-        let mut error = KafkaError::Seek("Could not seek partition".to_string());
-        while !seeked && nb_retries < max_retries {
-            if let Err(err) = consumer.seek(topic, *partition, offset_to_seek, req_timeout) {
-                nb_retries += 1;
-                log::warn!("Could not seek partition to desired offset, retrying");
-                tokio::time::sleep(Duration::from_millis(100)).await; // Subscription must be effective before seeking
-                error = err;
-            } else {
-                seeked = true
-            }
-        }
-        if !seeked {
-            return KafkaResult::Err(error);
-        }
-    }
-    log::debug!("All partitions watermarks fetched + synced in {}", (Utc::now() - start).num_milliseconds());
-
-    Ok(partitions_min_max)
-}
-
-fn create_client(conf: &KafkaClusterConfig) -> StreamConsumer {
+pub(crate) fn create_client(conf: &KafkaClusterConfig) -> StreamConsumer {
     let mut builder = ClientConfig::new();
     builder
         .set("bootstrap.servers", conf.bootstrap_servers.clone())
@@ -266,6 +179,102 @@ fn create_client(conf: &KafkaClusterConfig) -> StreamConsumer {
         .unwrap()
 }
 
+async fn wait_for_partitions<T: Predicate<OwnedMessage> + Send + ?Sized>(
+    topic: &str,
+    msg_receiver: &mut Receiver<PartitionProgress>,
+    sender: &Sender<SearchNotification>,
+    partition_status: &mut PerPartitionStatus,
+    predicate: &mut T,
+    notify_every: ChronoDuration,
+) -> (i64, i64) {
+    let mut read = 0;
+    let mut matches = 0;
+    let mut last_displayed = Utc::now();
+    while !partition_status.is_empty() {
+        if let Some(consumed) = msg_receiver.recv().await {
+            match consumed {
+                PartitionProgress::Msg(msg) => {
+                    read += 1;
+                    partition_status.make_progress(msg.partition, msg.progress);
+                    if predicate.matches(&msg.msg) {
+                        matches += 1;
+                        let to_send = SearchNotification::Match(msg.msg.clone());
+                        if let Err(e) = sender.send(to_send).await {
+                            log::error!("Could not forward matching msg: {:?}. {}", msg.msg, e)
+                        }
+                    }
+                    if Utc::now() > last_displayed + notify_every {
+                        last_displayed = Utc::now();
+                        let notification = partition_status.progress_notification(topic.to_string(), matches);
+                        if let Err(e) = sender.send(notification).await {
+                            log::error!("Could not send progress notification: {:?}", e)
+                        }
+                    }
+                },
+                PartitionProgress::Finish(notif) => {
+                    log::debug!("Finished consuming partition {}", notif.partition);
+                    partition_status.make_progress(notif.partition, notif.progress);
+                }
+                PartitionProgress::Start => {},
+            }
+        }
+    }
+    (read, matches)
+}
+
+async fn prepare_all_partitions(
+    topic_metadata: Vec<i32>,
+    conf: &KafkaClusterConfig,
+    topic: String,
+    bounds: &SearchBounds
+) -> Vec<Result<PartitionPreparationResult, JoinError>> {
+    let mut preparation_tasks = Vec::with_capacity(topic_metadata.len());
+    for partition in topic_metadata {
+        let conf = conf.clone();
+        let topic = topic.clone();
+        let bounds = bounds.clone();
+        preparation_tasks.push(tokio::task::spawn(async move {
+            prepare_partition(&conf, partition, &topic, &bounds)
+        }));
+    }
+    futures::future::join_all(preparation_tasks).await
+}
+
+fn seek_and_consume_partition(
+    topic: String,
+    msg_sender: &Sender<PartitionProgress>,
+    res: Result<PartitionPreparationResult, JoinError>,
+    partition_status: &mut PerPartitionStatus,
+    loop_infinitely: bool
+) {
+    match res {
+        Ok(Ok((consumer, part, (min_offset, max)))) => {
+            let min = min_offset.to_raw().unwrap_or_else(|| panic!("Could not represent offset {:?}", min_offset));
+            log::debug!("offset for partition: {} is {:?}", part, (min, max));
+            partition_status.start(part, min, max);
+            let msg_sender = msg_sender.clone();
+            tokio::task::spawn(async move {
+                seek_partition(&consumer, &topic, part, min_offset).await.expect("Could not seek partition");
+                consume_partition(&consumer, part, min, max, &msg_sender, loop_infinitely).await;
+            });
+        },
+        Ok(Err(err)) =>
+            log::error!("Could not seek partition to proper offset. Kafka error: {:?}", err),
+        _ =>
+            log::error!("Could not seek partition to proper offset")
+    }
+}
+
+async fn fetch_topic_metadata(consumer: &StreamConsumer, sender: &Sender<SearchNotification>, topic: &str) -> KafkaResult<Vec<i32>> {
+    let req_timeout = Timeout::After(Duration::from_secs(60));
+    if let Err(e) = sender.send(SearchNotification::Prepare(PreparationStep::FetchMetadata)).await {
+        log::error!("Could not send notification {}", e);
+    }
+
+    let metadata = consumer.fetch_metadata(Some(topic), req_timeout)?;
+    let partitions: Vec<i32> = metadata.topics()[0].partitions().iter().map(|part| part.id()).collect();
+    Ok(partitions)
+}
 
 #[cfg(test)]
 mod tests {
@@ -280,10 +289,13 @@ mod tests {
     use serde::{Serialize, Deserialize};
     use serde_json::to_string;
     use tokio::sync::mpsc::Receiver;
-    use crate::ChronoDuration;
+    use crate::{ChronoDuration, search_topic, SearchBounds, SearchEnd, SearchStart};
 
     use crate::config::KafkaClusterConfig;
+    use crate::search::extractors::json::json_single_extract;
+    use crate::search::matchers::PerfectMatch;
     use crate::search::notifications::SearchNotification;
+    use crate::search::SearchDefinition;
 
     /// The root module contains test utilities, tests themselves are placed in every submodule
     /// Most tests rely on having a Kafka cluster running
@@ -316,6 +328,8 @@ mod tests {
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", test_bootstrap_servers());
         config.set("message.timeout.ms", "5000");
+        config.set("acks", "0");
+        config.set("batch.size", "100000");
         config
     }
 
@@ -371,12 +385,12 @@ mod tests {
     /// Given a topic name, sets a topic up in the test cluster
     ///  - Cleans the topic if it exists
     ///  - Creates the test topic with a replication factor of 1, and 12 partitions
-    pub(crate) async fn prepare(topic: &str) {
+    pub(crate) async fn prepare(topic: &str, num_partitions: i32) {
         clean(topic).await;
         test_client_config()
             .create::<AdminClient<_>>()
             .expect("Could not create admin client")
-            .create_topics(vec![&NewTopic::new(topic, 12, TopicReplication::Fixed(1))], &AdminOptions::default())
+            .create_topics(vec![&NewTopic::new(topic, num_partitions, TopicReplication::Fixed(1))], &AdminOptions::default())
             .await
             .expect("Could not prepare test topics");
     }
@@ -538,14 +552,56 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_data_integration() {
+        //clean("test").await;
+        //prepare("test", 60).await;
         let before = Utc::now();
-        let recs = (1..700000).into_iter().map(|i| TestRecord { key: format!("key-{}",i), nested: NestedTestRecord {
+        // let range = 1..1_000_000;
+        // let range = 1_000_001..2_000_000;
+        // let range = 2_000_001..3_000_000;
+        // let range = 3_000_001..4_000_000;
+        // let range = 4_000_001..5_000_000;
+        // let range = 5_000_001..6_000_000;
+        // let range = 5_000_001..6_000_000;
+        // let range = 6_000_001..7_000_000;
+        // let range = 7_000_001..8_000_000;
+        // let range = 8_000_001..9_000_000;
+        let range = 9_000_001..10_000_000;
+        let recs = range.into_iter().map(|i| TestRecord { key: format!("key-{}",i), nested: NestedTestRecord {
             int: i,
             ints: vec![i-1, i, i+1],
             string: format!("some-{}", i)
         }}).collect::<Vec<TestRecord>>();
         produce_json_records("test", &recs).await;
         println!("Elapsed: {:?}", Utc::now() - before);
+    }
+
+
+    #[tokio::test]
+    #[ignore]
+    async fn local_search() {
+        let conf = test_cluster_config();
+        let (sender, mut receiver) = tokio::sync::mpsc::channel::<SearchNotification>(1024);
+        let bounds = SearchBounds {
+            start: SearchStart::Earliest,
+            end: SearchEnd::CurrentLast
+        };
+        let mut tasks = vec![];
+        tasks.push(
+            tokio::task::spawn(async move {
+                collect_search_notifications(&mut receiver, ChronoDuration::seconds(90)).await
+            })
+        );
+        // std::thread::sleep(core::time::Duration::from_secs(2));
+        tasks.push(
+            tokio::task::spawn(async move {
+                let extractor = json_single_extract("$.nested.int").expect("Could not create JSON path");
+                let matcher = PerfectMatch::new(serde_json::json!(4));
+                let mut search_definition = SearchDefinition::new(extractor, Box::new(matcher));
+                search_topic(conf, "test2".to_string(), sender, bounds, &mut search_definition, chrono::Duration::seconds(1)).await;
+                vec![]
+            })
+        );
+        futures::future::join_all(tasks).await;
     }
 
 }

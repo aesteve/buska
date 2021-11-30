@@ -121,7 +121,7 @@ pub(crate) fn json_value_matcher_from_cli(cli: &BuskaCli) -> Box<SizedPredicate<
             Box::new(OneOf::new(jsons))
         },
         (_, _, Some(regexp)) =>
-            Box::new(RegexMatch::new(&regexp).expect("Could not create regular expression")),
+            Box::new(RegexMatch::new(regexp).expect("Could not create regular expression")),
         _ => panic!("No matcher specified. Expecting: --matches-exactly, or --matches-one-of")
     }
 }
