@@ -1,0 +1,25 @@
+[package]
+name = "buska-web"
+version = "0.0.1"
+edition = "2021"
+authors = ["aesteve <arnaud.esteve@gmail.com>"]
+description = "A web interface for Buska: a tool to look for data in Kafka topics"
+keywords = ["kafka", "apache kafka", "search", "web"]
+
+[dependencies]
+buska-core = { path = "../core" }
+config = "0.11.0"
+env_logger = "0.9.0"
+axum = { version = "0.3.4" }
+hyper = { version = "0.14.15",  features = ["full"] }
+tokio = { version = "1.14.0",   features = ["full"] }
+tokio-stream = "0.1"
+tower = { version = "0.4.11",   features = ["full"] }
+tower-http = { version = "0.1.2", features = ["fs", "trace"] }
+
+# common dependencies for whole project
+chrono = "0.4.19"
+rdkafka = { version =  "0.27" , features = ["ssl", "cmake-build" ] }
+serde_json = "1.0"
+serde = { version = "1.0.124", features = ["derive"] }
+futures = "0.3"

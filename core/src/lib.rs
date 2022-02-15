@@ -555,7 +555,7 @@ mod tests {
         //clean("test").await;
         //prepare("test", 60).await;
         let before = Utc::now();
-        // let range = 1..1_000_000;
+        let range = 1..1_000_000;
         // let range = 1_000_001..2_000_000;
         // let range = 2_000_001..3_000_000;
         // let range = 3_000_001..4_000_000;
@@ -565,7 +565,7 @@ mod tests {
         // let range = 6_000_001..7_000_000;
         // let range = 7_000_001..8_000_000;
         // let range = 8_000_001..9_000_000;
-        let range = 9_000_001..10_000_000;
+        // let range = 9_000_001..10_000_000;
         let recs = range.into_iter().map(|i| TestRecord { key: format!("key-{}",i), nested: NestedTestRecord {
             int: i,
             ints: vec![i-1, i, i+1],
