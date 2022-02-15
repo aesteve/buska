@@ -39,7 +39,7 @@ impl MsgExtractor<Value> for JsonPathSingleExtract {
             Some(Err(e)) => Err(e.to_string()),
             Some(Ok(json)) => {
                 if let Ok(value) = serde_json::from_str::<Value>(json) {
-                    finder.set_json(value);
+                    finder.set_json(Box::new(value));
                     let found = finder.find(); // returns a JSON array
                     let matched = found
                         .as_array()
@@ -61,7 +61,7 @@ impl MsgExtractor<Vec<Value>> for JsonPathMultiExtract {
             Some(Err(e)) => Err(e.to_string()),
             Some(Ok(json)) => {
                 if let Ok(value) = serde_json::from_str::<Value>(json) {
-                    finder.set_json(value);
+                    finder.set_json(Box::new(value));
                     Ok(Some(finder.find_slice().into_iter().cloned().collect()))
                 } else {
                     Ok(None)
