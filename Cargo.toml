@@ -13,5 +13,6 @@ repository = "https://github.com/aesteve/buska"
 [workspace]
 members = [
     "./core",
-    "./cli"
+    "./cli",
+    "./web"
 ]

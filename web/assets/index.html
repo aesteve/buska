@@ -1,0 +1,75 @@
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <!-- Compressed CSS -->
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/foundation-sites@6.7.4/dist/css/foundation.min.css" crossorigin="anonymous">
+        <!-- Compressed JavaScript -->
+        <script src="https://cdn.jsdelivr.net/npm/foundation-sites@6.7.4/dist/js/foundation.min.js" crossorigin="anonymous"></script>
+        <link rel="stylesheet" href="css/main.css" />
+        <style>
+            .main {
+                margin: 1%;
+            }
+            .full-progress-blue {
+                width: 98%;
+                height: 30px;
+                margin: 1%;
+            }
+            .full-progress-blue[value] {
+                width: 98%;
+                height: 30px;
+            }
+            .full-progress-blue::-moz-progress-bar {
+                background: #3E63B3;
+            }
+            .full-progress-blue {
+                background: transparent;
+                color: #3E63B3; /* For IE10 */
+            }
+            .full-progress-blue::-moz-progress-bar {
+                background: #3E63B3;
+            }
+            .full-progress-blue::-webkit-progress-value {
+                background: #3E63B3;
+            }
+
+            .no-style-list {
+                list-style-type: none;
+                padding: 0;
+            }
+            .no-style-list li {
+                padding: 0;
+            }
+        </style>
+        <title>BusKa Web</title>
+    </head>
+    <body>
+        <!--script>
+        </script-->
+        <div id="app"></div>
+        <script src="elm.js"></script>
+        <script type="application/javascript">
+            const app = Elm.Home.init({
+                node: document.getElementById('app')
+            });
+            app.ports.startSearch.subscribe(() => {
+                const es = new EventSource("http://localhost:3000/sse");
+                es.onerror = msg => {
+                    if (msg.eventPhase === 2) {
+                        es.close();
+                    }
+                }
+                es.addEventListener('step', step => {
+                    app.ports.searchStepChanged.send(JSON.parse(step.data));
+                });
+                es.addEventListener('match', match => {
+                    app.ports.matchFound.send(match.data);
+                });
+                es.addEventListener('search-progress', p => {
+                    app.ports.searchProgressed.send(JSON.parse(p.data));
+                });
+
+            });
+        </script>
+    </body>
+</html>

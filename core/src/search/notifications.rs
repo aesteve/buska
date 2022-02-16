@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use chrono::{DateTime, Duration, Utc};
 use rdkafka::message::OwnedMessage;
+use serde::Serialize;
 
 #[derive(Debug, Clone)]
 pub enum SearchNotification {
@@ -20,7 +21,7 @@ pub enum PreparationStep {
     SeekPartitions,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct Progress {
     pub done: i64,
     pub total: i64,
