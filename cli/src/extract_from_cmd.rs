@@ -76,7 +76,7 @@ fn extract_cluster_config(cli: &BuskaCli) -> KafkaClusterConfig {
         config::Config::builder()
             .add_source(config::File::from(Path::new(config_file_path.as_str())))
             .build()
-            .expect(&*format!("Could not read the specified config file: {:?}", config_file_path))
+            .unwrap_or_else(|_| panic!("Could not read the specified config file: {:?}", config_file_path))
             .try_deserialize()
             .expect("Could not create Kafka cluster configuration from file")
     } else {
@@ -90,7 +90,11 @@ pub (crate) fn extract_search_bounds(cli: &BuskaCli) -> SearchBounds {
     } else if let Some(time) = cli.from_epoch_millis {
         SearchStart::Time(Utc.timestamp_millis(time))
     } else if let Some(repr) = &cli.from_iso_8601 {
-        SearchStart::Time(DateTime::parse_from_rfc3339(repr).expect(&*format!("Could not parse input date: {}. Is this a valid ISO-8601 (RFC-3339) formatted date?", repr)).with_timezone(&Utc))
+        SearchStart::Time(
+            DateTime::parse_from_rfc3339(repr)
+                .unwrap_or_else(|_| panic!("Could not parse input date: {}. Is this a valid ISO-8601 (RFC-3339) formatted date?", repr))
+                .with_timezone(&Utc)
+        )
     } else {
         panic!("Please specify the search start by using: --from-beginning, --from-epoch-millis=1636308199000 or --from-iso_8601=2021-11-07T19:03:55+0100")
     };
