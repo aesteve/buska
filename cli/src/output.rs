@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{LineWriter, Write};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressState, ProgressStyle};
 use rdkafka::message::{Message, OwnedMessage};
 use tokio::sync::mpsc::Receiver;
 use buska_core::search::notifications::{ProgressNotification, SearchNotification};
@@ -97,16 +97,20 @@ pub(crate) async fn cli_notifications_loop(mut receiver: Receiver<SearchNotifica
 }
 
 fn create_partition_bars(progress: ProgressNotification) -> (MultiProgress, HashMap<i32, ProgressBar>) {
-    let sty = ProgressStyle::default_bar()
-        .template("{msg} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos:>7}/{len:7} ({eta})")
-        .with_key("eta", |state| format!("{:.1}s", state.eta().as_secs_f64()))
+    let style = ProgressStyle::with_template("{msg} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos:>7}/{len:7} ({eta})")
+        .expect("Internal error: wrong template")
+        .with_key(
+            "eta",
+            |state: &ProgressState, w: &mut dyn std::fmt::Write|
+                write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+        )
         .progress_chars("#>-");
     let mut map = HashMap::new();
     let mb = MultiProgress::new();
     for (part, part_progress) in progress.per_partition_progress {
         let part_bar = mb.add(ProgressBar::new(part_progress.total as u64)
             .with_message(format!("Partition {}: ", part)))
-            .with_style(sty.clone());
+            .with_style(style.clone());
         map.insert(part, part_bar);
     }
     (mb, map)

@@ -8,7 +8,7 @@ use crate::search::Predicate;
 use crate::search::bounds::{SearchBounds, SearchEnd, SearchStart};
 use crate::search::notifications::{FinishNotification, PartitionMsg, PartitionProgress, PreparationStep, Progress, ProgressNotification, SearchNotification};
 
-use chrono::{Utc, Duration as ChronoDuration, TimeZone, DateTime};
+use chrono::{Utc, Duration as ChronoDuration, TimeZone, DateTime, NaiveDateTime};
 use config::KafkaClusterConfig;
 use rdkafka::{ClientConfig, Offset as RdOffset, Offset};
 use rdkafka::config::RDKafkaLogLevel;
@@ -63,7 +63,7 @@ impl PerPartitionStatus {
         let eta = if overall_progress.rate > 0.1 {
             self.start + ChronoDuration::milliseconds((elapsed.num_milliseconds() as f64 / overall_progress.rate) as i64)
         } else {
-            Utc.from_utc_datetime(&chrono::naive::MAX_DATETIME)
+            Utc.from_utc_datetime(&NaiveDateTime::MAX)
         };
         SearchNotification::Progress(
             ProgressNotification {
