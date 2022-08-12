@@ -70,7 +70,7 @@ jobs:
 
       - id: docker-build
         name: Build release using Docker
-        run: docker build -t ${{ secrets.DOCKER_HUB_USERNAME }}/buska-cli:${{steps.version.outputs.version}} .
+        run: docker build -t ${{ secrets.DOCKER_HUB_USERNAME }}/buska-cli:${{steps.version.outputs.version}} -f DockerfileNoCache .
 
       - id: docker-push
         name: Push docker image to Docker hub
