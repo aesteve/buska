@@ -2,8 +2,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{LineWriter, Write};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use rdkafka::Message;
-use rdkafka::message::OwnedMessage;
+use rdkafka::message::{Message, OwnedMessage};
 use tokio::sync::mpsc::Receiver;
 use buska_core::search::notifications::{ProgressNotification, SearchNotification};
 

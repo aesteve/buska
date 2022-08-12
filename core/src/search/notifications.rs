@@ -12,7 +12,7 @@ pub enum SearchNotification {
     Match(OwnedMessage)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreparationStep {
     CreateClient,
     FetchMetadata,
