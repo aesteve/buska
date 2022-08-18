@@ -56,7 +56,7 @@ jobs:
       - id: version
         name: Get Fully qualified version
         run: >
-          echo "::set-output name=version::$(cargo pkgid --manifest-path cli/Cargo.toml | cut -d# -f2)"
+          echo "::set-output name=version::$(cargo pkgid --manifest-path cli/Cargo.toml | cut -d# -f2 | sed 's/@/:/')"
 
       #
       # Docker
