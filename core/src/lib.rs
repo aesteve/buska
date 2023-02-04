@@ -4,24 +4,27 @@ pub mod utils;
 
 mod partition;
 
-use crate::search::Predicate;
 use crate::search::bounds::{SearchBounds, SearchEnd, SearchStart};
-use crate::search::notifications::{FinishNotification, PartitionMsg, PartitionProgress, PreparationStep, Progress, ProgressNotification, SearchNotification};
+use crate::search::notifications::{
+    FinishNotification, PartitionMsg, PartitionProgress, PreparationStep, Progress,
+    ProgressNotification, SearchNotification,
+};
+use crate::search::Predicate;
 
-use chrono::{Utc, Duration as ChronoDuration, TimeZone, DateTime, NaiveDateTime};
+use chrono::{DateTime, Duration as ChronoDuration, NaiveDateTime, TimeZone, Utc};
 use config::KafkaClusterConfig;
-use rdkafka::{ClientConfig, Offset as RdOffset, Offset};
 use rdkafka::config::RDKafkaLogLevel;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::error::KafkaResult;
 use rdkafka::util::Timeout;
+use rdkafka::{ClientConfig, Offset as RdOffset, Offset};
 
+use crate::partition::{consume_partition, prepare_partition, seek_partition};
+use rdkafka::message::OwnedMessage;
 use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
-use rdkafka::message::OwnedMessage;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinError;
-use crate::partition::{consume_partition, prepare_partition, seek_partition};
 
 type PreparedPartition = (StreamConsumer, i32, (Offset, i64));
 type PartitionPreparationResult = KafkaResult<PreparedPartition>;
@@ -29,7 +32,7 @@ type PartitionPreparationResult = KafkaResult<PreparedPartition>;
 struct PerPartitionStatus {
     progress: BTreeMap<i32, Progress>,
     to_finish: HashSet<i32>,
-    start: DateTime<Utc>
+    start: DateTime<Utc>,
 }
 
 impl PerPartitionStatus {
@@ -37,7 +40,7 @@ impl PerPartitionStatus {
         PerPartitionStatus {
             progress: BTreeMap::new(),
             to_finish: HashSet::with_capacity(nb_partition),
-            start: Utc::now()
+            start: Utc::now(),
         }
     }
 
@@ -61,20 +64,21 @@ impl PerPartitionStatus {
         let overall_progress = self.progress();
         let elapsed = Utc::now() - self.start;
         let eta = if overall_progress.rate > 0.1 {
-            self.start + ChronoDuration::milliseconds((elapsed.num_milliseconds() as f64 / overall_progress.rate) as i64)
+            self.start
+                + ChronoDuration::milliseconds(
+                    (elapsed.num_milliseconds() as f64 / overall_progress.rate) as i64,
+                )
         } else {
             Utc.from_utc_datetime(&NaiveDateTime::MAX)
         };
-        SearchNotification::Progress(
-            ProgressNotification {
-                topic,
-                overall_progress: self.progress(),
-                per_partition_progress: self.progress_per_partition(),
-                matches,
-                elapsed,
-                eta
-            }
-        )
+        SearchNotification::Progress(ProgressNotification {
+            topic,
+            overall_progress: self.progress(),
+            per_partition_progress: self.progress_per_partition(),
+            matches,
+            elapsed,
+            eta,
+        })
     }
 
     fn total(&self) -> i64 {
@@ -82,10 +86,7 @@ impl PerPartitionStatus {
     }
 
     fn done(&self) -> i64 {
-        self.progress
-            .values()
-            .map(|p| p.done)
-            .sum()
+        self.progress.values().map(|p| p.done).sum()
     }
 
     fn progress_per_partition(&self) -> BTreeMap<i32, Progress> {
@@ -112,19 +113,35 @@ pub async fn search_topic<T: Predicate<OwnedMessage> + Send + ?Sized>(
 ) {
     let search_start = Utc::now();
     let loop_infinitely = bounds.end == SearchEnd::Unbounded;
-    if let Err(e) = sender.send(SearchNotification::Prepare(PreparationStep::CreateClient)).await {
+    if let Err(e) = sender
+        .send(SearchNotification::Prepare(PreparationStep::CreateClient))
+        .await
+    {
         log::error!("Could not send notification {}", e);
     }
     let consumer = create_client(&conf);
-    log::debug!("Kafka consumer created in {} millis", (Utc::now() - search_start).num_milliseconds());
-    let topic_metadata = fetch_topic_metadata(&consumer, &sender, &topic).await.expect("Could not fetch topic metadata");
+    log::debug!(
+        "Kafka consumer created in {} millis",
+        (Utc::now() - search_start).num_milliseconds()
+    );
+    let topic_metadata = fetch_topic_metadata(&consumer, &sender, &topic)
+        .await
+        .expect("Could not fetch topic metadata");
     let nb_partitions = topic_metadata.len();
     let mut partition_status = PerPartitionStatus::new(nb_partitions);
-    if let Err(e) = sender.send(SearchNotification::Prepare(PreparationStep::FetchWatermarks)).await {
+    if let Err(e) = sender
+        .send(SearchNotification::Prepare(
+            PreparationStep::FetchWatermarks,
+        ))
+        .await
+    {
         log::error!("Could not send notification {}", e);
     }
     let prepared = prepare_all_partitions(topic_metadata, &conf, topic.clone(), &bounds).await;
-    if let Err(e) = sender.send(SearchNotification::Prepare(PreparationStep::SeekPartitions)).await {
+    if let Err(e) = sender
+        .send(SearchNotification::Prepare(PreparationStep::SeekPartitions))
+        .await
+    {
         log::error!("Could not send notification {}", e);
     }
     let (msg_sender, mut msg_receiver) = tokio::sync::mpsc::channel::<PartitionProgress>(1024);
@@ -134,26 +151,35 @@ pub async fn search_topic<T: Predicate<OwnedMessage> + Send + ?Sized>(
             &msg_sender,
             res,
             &mut partition_status,
-            loop_infinitely
+            loop_infinitely,
         );
     }
-    sender.send(SearchNotification::Start)
+    sender
+        .send(SearchNotification::Start)
         .await
         .expect("Could not send start notification. Crashing");
-    sender.send(partition_status.progress_notification(topic.clone(), 0))
+    sender
+        .send(partition_status.progress_notification(topic.clone(), 0))
         .await
         .expect("Could not send first progress notification. Crashing");
     let (nb_read, nb_match) = wait_for_partitions(
         &topic,
-        &mut msg_receiver, &sender,
+        &mut msg_receiver,
+        &sender,
         &mut partition_status,
         predicate,
-        notify_every
-    ).await;
+        notify_every,
+    )
+    .await;
     log::debug!("Reached end of consumption. Sending end marker");
     let search_duration = Utc::now() - search_start;
     sender
-        .send(SearchNotification::Finish(FinishNotification::new(topic, nb_match, nb_read, search_duration)))
+        .send(SearchNotification::Finish(FinishNotification::new(
+            topic,
+            nb_match,
+            nb_read,
+            search_duration,
+        )))
         .await
         .expect("Could not notify end of topic search, crashing");
 }
@@ -170,13 +196,17 @@ pub(crate) fn create_client(conf: &KafkaClusterConfig) -> StreamConsumer {
     if let Some(security_conf) = &conf.security {
         builder
             .set("security.protocol", "SSL")
-            .set("ssl.key.location", security_conf.service_key_location.clone())
-            .set("ssl.certificate.location", security_conf.service_cert_location.clone())
+            .set(
+                "ssl.key.location",
+                security_conf.service_key_location.clone(),
+            )
+            .set(
+                "ssl.certificate.location",
+                security_conf.service_cert_location.clone(),
+            )
             .set("ssl.ca.location", security_conf.ca_pem_location.clone());
     }
-    builder
-        .create()
-        .unwrap()
+    builder.create().unwrap()
 }
 
 async fn wait_for_partitions<T: Predicate<OwnedMessage> + Send + ?Sized>(
@@ -205,17 +235,18 @@ async fn wait_for_partitions<T: Predicate<OwnedMessage> + Send + ?Sized>(
                     }
                     if Utc::now() > last_displayed + notify_every {
                         last_displayed = Utc::now();
-                        let notification = partition_status.progress_notification(topic.to_string(), matches);
+                        let notification =
+                            partition_status.progress_notification(topic.to_string(), matches);
                         if let Err(e) = sender.send(notification).await {
                             log::error!("Could not send progress notification: {:?}", e)
                         }
                     }
-                },
+                }
                 PartitionProgress::Finish(notif) => {
                     log::debug!("Finished consuming partition {}", notif.partition);
                     partition_status.make_progress(notif.partition, notif.progress);
                 }
-                PartitionProgress::Start => {},
+                PartitionProgress::Start => {}
             }
         }
     }
@@ -226,7 +257,7 @@ async fn prepare_all_partitions(
     topic_metadata: Vec<i32>,
     conf: &KafkaClusterConfig,
     topic: String,
-    bounds: &SearchBounds
+    bounds: &SearchBounds,
 ) -> Vec<Result<PartitionPreparationResult, JoinError>> {
     let mut preparation_tasks = Vec::with_capacity(topic_metadata.len());
     for partition in topic_metadata {
@@ -245,51 +276,67 @@ fn seek_and_consume_partition(
     msg_sender: &Sender<PartitionProgress>,
     res: Result<PartitionPreparationResult, JoinError>,
     partition_status: &mut PerPartitionStatus,
-    loop_infinitely: bool
+    loop_infinitely: bool,
 ) {
     match res {
         Ok(Ok((consumer, part, (min_offset, max)))) => {
-            let min = min_offset.to_raw().unwrap_or_else(|| panic!("Could not represent offset {:?}", min_offset));
+            let min = min_offset
+                .to_raw()
+                .unwrap_or_else(|| panic!("Could not represent offset {min_offset:?}"));
             log::debug!("offset for partition: {} is {:?}", part, (min, max));
             partition_status.start(part, min, max);
             let msg_sender = msg_sender.clone();
             tokio::task::spawn(async move {
-                seek_partition(&consumer, &topic, part, min_offset).await.expect("Could not seek partition");
+                seek_partition(&consumer, &topic, part, min_offset)
+                    .await
+                    .expect("Could not seek partition");
                 consume_partition(&consumer, part, min, max, &msg_sender, loop_infinitely).await;
             });
-        },
-        Ok(Err(err)) =>
-            log::error!("Could not seek partition to proper offset. Kafka error: {:?}", err),
-        _ =>
-            log::error!("Could not seek partition to proper offset")
+        }
+        Ok(Err(err)) => log::error!(
+            "Could not seek partition to proper offset. Kafka error: {:?}",
+            err
+        ),
+        _ => log::error!("Could not seek partition to proper offset"),
     }
 }
 
-async fn fetch_topic_metadata(consumer: &StreamConsumer, sender: &Sender<SearchNotification>, topic: &str) -> KafkaResult<Vec<i32>> {
+async fn fetch_topic_metadata(
+    consumer: &StreamConsumer,
+    sender: &Sender<SearchNotification>,
+    topic: &str,
+) -> KafkaResult<Vec<i32>> {
     let req_timeout = Timeout::After(Duration::from_secs(60));
-    if let Err(e) = sender.send(SearchNotification::Prepare(PreparationStep::FetchMetadata)).await {
+    if let Err(e) = sender
+        .send(SearchNotification::Prepare(PreparationStep::FetchMetadata))
+        .await
+    {
         log::error!("Could not send notification {}", e);
     }
 
     let metadata = consumer.fetch_metadata(Some(topic), req_timeout)?;
-    let partitions: Vec<i32> = metadata.topics()[0].partitions().iter().map(|part| part.id()).collect();
+    let partitions: Vec<i32> = metadata.topics()[0]
+        .partitions()
+        .iter()
+        .map(|part| part.id())
+        .collect();
     Ok(partitions)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
     use chrono::Utc;
     use quickcheck::{Arbitrary, Gen};
+    use std::time::Duration;
 
+    use crate::{search_topic, ChronoDuration, SearchBounds, SearchEnd, SearchStart};
     use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
-    use rdkafka::{ClientConfig, Message, Timestamp};
-    use rdkafka::message::{Headers, OwnedHeaders, OwnedMessage};
+    use rdkafka::message::{Header, OwnedHeaders, OwnedMessage};
     use rdkafka::producer::{FutureProducer, FutureRecord};
-    use serde::{Serialize, Deserialize};
+    use rdkafka::{ClientConfig, Message, Timestamp};
+    use serde::{Deserialize, Serialize};
     use serde_json::to_string;
     use tokio::sync::mpsc::Receiver;
-    use crate::{ChronoDuration, search_topic, SearchBounds, SearchEnd, SearchStart};
 
     use crate::config::KafkaClusterConfig;
     use crate::search::extractors::json::json_single_extract;
@@ -309,16 +356,15 @@ mod tests {
     /// Returns the test cluster's bootstrap servers address configuration
     /// (i.e. localhost, KAFKA_PORT)
     pub(crate) fn test_bootstrap_servers() -> String {
-        format!("localhost:{}", KAFKA_PORT)
+        format!("localhost:{KAFKA_PORT}")
     }
-
 
     /// Returns a KafkaClusterConfig matching the test environment
     /// (i.e. localhost, KAFKA_PORT, and no SSL config)
     pub(crate) fn test_cluster_config() -> KafkaClusterConfig {
         KafkaClusterConfig {
             bootstrap_servers: test_bootstrap_servers(),
-            security: None
+            security: None,
         }
     }
 
@@ -333,7 +379,6 @@ mod tests {
         config
     }
 
-
     /// Returns a Kafka (librdkafka-rust) producer configured to match the test environment
     /// Useful for creating mock data
     pub(crate) fn test_producer() -> FutureProducer {
@@ -346,7 +391,7 @@ mod tests {
     #[derive(Serialize, Deserialize, Clone, Debug)]
     pub(crate) struct TestRecord {
         pub(crate) key: String,
-        pub(crate) nested: NestedTestRecord
+        pub(crate) nested: NestedTestRecord,
     }
 
     /// In order to allow writing & testing complex JSON matchers, the TestRecord contains nested JSON
@@ -356,7 +401,6 @@ mod tests {
         pub(crate) ints: Vec<u32>,
         pub(crate) string: String,
     }
-
 
     /// Utility method to write JSON TestRecords in a topic
     pub(crate) async fn produce_json_records(topic: &str, recs: &[TestRecord]) {
@@ -369,12 +413,13 @@ mod tests {
                 for rec in c {
                     producer
                         .send(
-                            FutureRecord::to(&t)
-                                .key(&rec.clone().key)
-                                .payload(&to_string(&rec.clone()).expect("Could not serialize test record as JSON"))
-                            ,
-                            Duration::from_millis(100)
-                        ).await
+                            FutureRecord::to(&t).key(&rec.clone().key).payload(
+                                &to_string(&rec.clone())
+                                    .expect("Could not serialize test record as JSON"),
+                            ),
+                            Duration::from_millis(100),
+                        )
+                        .await
                         .expect("Could not produce test record");
                 }
             }));
@@ -390,7 +435,14 @@ mod tests {
         test_client_config()
             .create::<AdminClient<_>>()
             .expect("Could not create admin client")
-            .create_topics(vec![&NewTopic::new(topic, num_partitions, TopicReplication::Fixed(1))], &AdminOptions::default())
+            .create_topics(
+                vec![&NewTopic::new(
+                    topic,
+                    num_partitions,
+                    TopicReplication::Fixed(1),
+                )],
+                &AdminOptions::default(),
+            )
             .await
             .expect("Could not prepare test topics");
     }
@@ -407,7 +459,10 @@ mod tests {
 
     /// Given a receiver, collects every received notification until the end marker has been received
     /// Then returns the list of every received notification
-    pub(crate) async fn collect_search_notifications(receiver: &mut Receiver<SearchNotification>, timeout: ChronoDuration) -> Vec<SearchNotification> {
+    pub(crate) async fn collect_search_notifications(
+        receiver: &mut Receiver<SearchNotification>,
+        timeout: ChronoDuration,
+    ) -> Vec<SearchNotification> {
         let mut notifications = Vec::new();
         let mut stop = false;
         let start = Utc::now();
@@ -421,7 +476,6 @@ mod tests {
         }
         notifications
     }
-
 
     // Property-Based Testing
     // Some of our tests are not "example-based", some are in the form of: "no matter what input, [...] should happen"
@@ -442,7 +496,7 @@ mod tests {
                 self.0.timestamp(),
                 self.0.partition(),
                 self.0.offset(),
-                self.0.headers().cloned()
+                self.0.headers().cloned(),
             )
         }
 
@@ -454,7 +508,7 @@ mod tests {
                 self.0.timestamp(),
                 self.0.partition(),
                 self.0.offset(),
-                None
+                None,
             )
         }
 
@@ -466,7 +520,7 @@ mod tests {
                 self.0.timestamp(),
                 self.0.partition(),
                 self.0.offset(),
-                None
+                None,
             )
         }
 
@@ -478,20 +532,20 @@ mod tests {
                 self.0.timestamp(),
                 self.0.partition(),
                 self.0.offset(),
-                None
+                None,
             )
         }
 
-
-
         pub(crate) fn add_header(&self, name: &str, value: &str) -> OwnedMessage {
-            let headers =  match self.0.headers().cloned().as_mut() {
-                Some(h) =>
-                    copy_headers(h)
-                        .add(name, value),
-                _ =>
-                    OwnedHeaders::new_with_capacity(1)
-                        .add(name, value)
+            let headers = match self.0.headers().cloned().as_mut() {
+                Some(h) => copy_headers(h).insert(Header {
+                    key: name,
+                    value: Some(value),
+                }),
+                _ => OwnedHeaders::new_with_capacity(1).insert(Header {
+                    key: name,
+                    value: Some(value),
+                }),
             };
             OwnedMessage::new(
                 self.0.payload().map(|v| v.to_vec()),
@@ -500,17 +554,16 @@ mod tests {
                 self.0.timestamp(),
                 self.0.partition(),
                 self.0.offset(),
-                Some(headers)
+                Some(headers),
             )
         }
     }
-
 
     fn rand_timestamp(g: &mut Gen) -> Timestamp {
         let timestamps = &[
             Timestamp::NotAvailable,
             Timestamp::CreateTime(i64::arbitrary(g)),
-            Timestamp::LogAppendTime(i64::arbitrary(g))
+            Timestamp::LogAppendTime(i64::arbitrary(g)),
         ];
         *g.choose(timestamps).unwrap()
     }
@@ -533,21 +586,14 @@ mod tests {
                 rand_timestamp(g),
                 i32::arbitrary(g),
                 i64::arbitrary(g),
-                None
+                None,
             ))
         }
     }
 
     fn copy_headers(h: &OwnedHeaders) -> OwnedHeaders {
-        let c = h.count();
-        let mut res = OwnedHeaders::new_with_capacity(c);
-        for i in 0..c {
-            let header = h.get(i).expect("Could not extract header by index");
-            res = res.add(header.0, header.1);
-        }
-        res
+        h.clone()
     }
-
 
     #[tokio::test]
     #[ignore]
@@ -566,15 +612,20 @@ mod tests {
         // let range = 7_000_001..8_000_000;
         // let range = 8_000_001..9_000_000;
         let range = 9_000_001..10_000_000;
-        let recs = range.into_iter().map(|i| TestRecord { key: format!("key-{}",i), nested: NestedTestRecord {
-            int: i,
-            ints: vec![i-1, i, i+1],
-            string: format!("some-{}", i)
-        }}).collect::<Vec<TestRecord>>();
+        let recs = range
+            .into_iter()
+            .map(|i| TestRecord {
+                key: format!("key-{i}"),
+                nested: NestedTestRecord {
+                    int: i,
+                    ints: vec![i - 1, i, i + 1],
+                    string: format!("some-{i}"),
+                },
+            })
+            .collect::<Vec<TestRecord>>();
         produce_json_records("test", &recs).await;
         println!("Elapsed: {:?}", Utc::now() - before);
     }
-
 
     #[tokio::test]
     #[ignore]
@@ -583,25 +634,29 @@ mod tests {
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<SearchNotification>(1024);
         let bounds = SearchBounds {
             start: SearchStart::Earliest,
-            end: SearchEnd::CurrentLast
+            end: SearchEnd::CurrentLast,
         };
         let mut tasks = vec![];
-        tasks.push(
-            tokio::task::spawn(async move {
-                collect_search_notifications(&mut receiver, ChronoDuration::seconds(90)).await
-            })
-        );
+        tasks.push(tokio::task::spawn(async move {
+            collect_search_notifications(&mut receiver, ChronoDuration::seconds(90)).await
+        }));
         // std::thread::sleep(core::time::Duration::from_secs(2));
-        tasks.push(
-            tokio::task::spawn(async move {
-                let extractor = json_single_extract("$.nested.int").expect("Could not create JSON path");
-                let matcher = PerfectMatch::new(serde_json::json!(4));
-                let mut search_definition = SearchDefinition::new(extractor, Box::new(matcher));
-                search_topic(conf, "test2".to_string(), sender, bounds, &mut search_definition, chrono::Duration::seconds(1)).await;
-                vec![]
-            })
-        );
+        tasks.push(tokio::task::spawn(async move {
+            let extractor =
+                json_single_extract("$.nested.int").expect("Could not create JSON path");
+            let matcher = PerfectMatch::new(serde_json::json!(4));
+            let mut search_definition = SearchDefinition::new(extractor, Box::new(matcher));
+            search_topic(
+                conf,
+                "test2".to_string(),
+                sender,
+                bounds,
+                &mut search_definition,
+                chrono::Duration::seconds(1),
+            )
+            .await;
+            vec![]
+        }));
         futures::future::join_all(tasks).await;
     }
-
 }
