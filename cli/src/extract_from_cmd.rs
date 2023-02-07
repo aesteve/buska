@@ -143,7 +143,6 @@ pub(crate) fn json_value_matcher_from_cli(cli: &BuskaCli) -> Box<SizedPredicate<
         (_, Some(one_of), _) => {
             let jsons: Vec<Value> = one_of
                 .split(',')
-                .into_iter()
                 .map(|s| serde_json::json!(s.to_string()))
                 .collect();
             Box::new(OneOf::new(jsons))
@@ -165,7 +164,6 @@ pub(crate) fn string_matcher_from_cli(cli: &BuskaCli) -> Box<SizedPredicate<Stri
         (_, Some(one_of), _) => Box::new(OneOf::new(
             one_of
                 .split(',')
-                .into_iter()
                 .map(|s| s.to_string())
                 .collect::<Vec<String>>(),
         )),

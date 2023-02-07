@@ -160,7 +160,6 @@ mod tests {
         let topic = "some_topic";
         prepare(topic, 12).await;
         let records = (1..1000)
-            .into_iter()
             .map(|i| TestRecord {
                 key: i.to_string(),
                 nested: NestedTestRecord {
