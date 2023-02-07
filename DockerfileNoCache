@@ -1,0 +1,14 @@
+FROM rustlang/rust:nightly-bullseye-slim as builder
+RUN apt update
+RUN apt install -y cmake build-essential libssl-dev pkg-config
+WORKDIR app
+COPY . .
+RUN cargo +nightly build --all --release
+
+FROM debian:bullseye-slim AS runtime
+WORKDIR app
+RUN apt update
+RUN apt install -y libssl1.1 openssl ca-certificates
+COPY --from=builder /app/target/release/buska-cli /usr/local/bin
+
+ENTRYPOINT ["/usr/local/bin/buska-cli"]

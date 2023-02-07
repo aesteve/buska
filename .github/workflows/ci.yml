@@ -11,7 +11,7 @@ jobs:
       - name: Set up rust toolchain
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: stable
+          toolchain: nightly
           components: clippy
           override: true
 
@@ -54,9 +54,9 @@ jobs:
         run: docker-compose -f "docker-compose.yml" down
 
       - id: version
-        name: Get Package version
+        name: Get Fully qualified version
         run: >
-          echo "::set-output name=version::$(cargo pkgid | cut -d# -f2 | cut -d: -f2)"
+          echo "::set-output name=version::$(cargo pkgid --manifest-path cli/Cargo.toml | cut -d# -f2 | sed 's/@/:/')"
 
       #
       # Docker
@@ -70,9 +70,9 @@ jobs:
 
       - id: docker-build
         name: Build release using Docker
-        run: docker build -t ${{ secrets.DOCKER_HUB_USERNAME }}/buska-cli:${{steps.version.outputs.version}} .
+        run: docker build -t ${{ secrets.DOCKER_HUB_USERNAME }}/${{steps.version.outputs.version}} -f DockerfileNoCache .
 
       - id: docker-push
         name: Push docker image to Docker hub
         if: github.ref == 'refs/heads/main'
-        run: docker push ${{ secrets.DOCKER_HUB_USERNAME }}/buska-cli:${{steps.version.outputs.version}}
+        run: docker push ${{ secrets.DOCKER_HUB_USERNAME }}/${{steps.version.outputs.version}}

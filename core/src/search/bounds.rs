@@ -1,19 +1,19 @@
 use chrono::{DateTime, Utc};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SearchStart {
     Earliest,
     Time(DateTime<Utc>)
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SearchEnd {
     CurrentLast,
     Time(DateTime<Utc>),
     Unbounded
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SearchBounds {
     pub start: SearchStart,
     pub end: SearchEnd

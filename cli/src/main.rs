@@ -1,14 +1,13 @@
 mod extract_from_cmd;
 mod output;
 
-use chrono::{Duration as ChronoDuration};
-use clap::Parser;
 use buska_core::search::bounds::SearchEnd;
 use buska_core::search::notifications::SearchNotification;
+use chrono::Duration as ChronoDuration;
+use clap::Parser;
 
 use crate::extract_from_cmd::{extract_search_bounds, perform_search};
 use crate::output::{cli_notifications_loop, Out};
-
 
 /// Welcome to Buska, a CLI for looking for messages within an Apache Kafka cluster
 /// The CLI is composed of 3 parts:
@@ -66,7 +65,6 @@ struct BuskaCli {
     #[clap(short, long)]
     to_iso_8601: Option<String>,
 
-
     /// Extract a header by its name for matching
     #[clap(short, long)]
     extract_header: Option<String>,
@@ -98,7 +96,6 @@ struct BuskaCli {
     out: String,
 }
 
-
 #[tokio::main]
 async fn main() {
     env_logger::init();
@@ -109,24 +106,18 @@ async fn main() {
     let unbounded = bounds.end == SearchEnd::Unbounded;
     let (sender, receiver) = tokio::sync::mpsc::channel::<SearchNotification>(1024);
 
-    let out =
-        if cli.out.to_lowercase() == "stdout" {
-            Out::Stdout
-        } else {
-            Out::File(cli.out.clone())
-        };
+    let out = if cli.out.to_lowercase() == "stdout" {
+        Out::Stdout
+    } else {
+        Out::File(cli.out.clone())
+    };
     let mut tasks = vec![];
     // Launch the loop that will listen to search notifications and print the result to stdout
     tasks.push(tokio::task::spawn(async move {
         cli_notifications_loop(receiver, unbounded, out).await;
     }));
     // Launch the Search process with the appropriate options extracted from user-inputs
-    tasks.push(perform_search(
-        cli,
-        bounds,
-        display_every,
-        sender
-    ));
+    tasks.push(perform_search(cli, bounds, display_every, sender));
     // Wait for both tasks (searching / notifying) to complete
     futures::future::join_all(tasks).await;
 }

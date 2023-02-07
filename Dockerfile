@@ -1,50 +1,28 @@
-FROM rust:1.56.1 as builder
+FROM rustlang/rust:nightly-bullseye-slim as chef
+RUN cargo +nightly install cargo-chef --locked
+WORKDIR app
 
-## Optimizing build time by caching in layers the result of compiling project dependencies
-RUN USER=root cargo new --bin buska
-WORKDIR /buska
+FROM chef AS planner
+COPY . .
+RUN cargo +nightly chef prepare --recipe-path recipe.json
 
+FROM chef AS builder
+
+COPY --from=planner /app/recipe.json recipe.json
+# Build dependencies - this is the caching Docker layer!
+RUN apt update
+RUN apt install -y cmake
+RUN apt install -y libssl-dev
+RUN cargo +nightly chef cook --release --recipe-path recipe.json
+# Build application
+COPY . .
+RUN cargo +nightly build --all --release
 RUN apt-get update && apt-get install -y cmake
 
-# Copy manifests
-COPY ./Cargo.lock ./Cargo.lock
-COPY ./Cargo.toml ./Cargo.toml
-# Sub-Projects
-RUN mkdir -p cli/src
-COPY ./cli/Cargo.toml ./cli/Cargo.toml
-RUN mkdir -p core/src
-COPY ./core/Cargo.toml ./core/Cargo.toml
+FROM debian:bullseye-slim AS runtime
+WORKDIR app
+RUN apt update
+RUN apt install -y libssl1.1 openssl ca-certificates
+COPY --from=builder /app/target/release/buska-cli /usr/local/bin
 
-RUN cp src/main.rs cli/src/
-RUN cp src/main.rs core/src/
-
-# Build with no sources, so that it caches dependencies
-RUN cargo build --all --release
-RUN rm -rf src
-
-# Copy sources in order to build the proper release
-COPY ./src ./src
-COPY ./cli/src ./cli/src
-COPY ./core/src ./core/src
-
-# Build the release
-RUN rm -f ./target/release/deps/buska*
-RUN cargo build --all --release
-
-# Copy executable file to safe directory
-RUN mkdir -p /build-out
-RUN cp target/release/buska-cli /build-out/
-
-FROM ubuntu:latest
-WORKDIR /opt
-
-# Setting environment variables
-
-# Install mandatory packages
-RUN apt-get update && apt-get install -y libssl1.1 openssl ca-certificates
-
-
-# Get the executable file from previous build
-COPY --from=builder /build-out/buska-cli /opt
-
-ENTRYPOINT ["/opt/buska-cli"]
+ENTRYPOINT ["/usr/local/bin/buska-cli"]

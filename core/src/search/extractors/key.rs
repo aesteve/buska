@@ -3,13 +3,8 @@ use rdkafka::message::OwnedMessage;
 use crate::search::extractors::ExtractResult;
 use crate::search::MsgExtractor;
 
+#[derive(Default)]
 pub struct KeyExtractor {}
-
-impl Default for KeyExtractor {
-    fn default() -> Self {
-        KeyExtractor {}
-    }
-}
 
 impl MsgExtractor<Vec<u8>> for KeyExtractor {
     fn extract(&mut self, msg: &OwnedMessage) -> ExtractResult<Vec<u8>> {

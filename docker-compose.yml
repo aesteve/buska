@@ -1,8 +1,8 @@
 ---
-version: '3'
+version: '3.5'
 services:
   broker:
-    image: confluentinc/cp-kafka:7.0.1
+    image: confluentinc/cp-kafka:7.2.1
     hostname: broker
     container_name: broker
     ports:
@@ -39,7 +39,7 @@ services:
           memory: 512M
 
   schema-registry:
-    image: confluentinc/cp-schema-registry:7.0.1
+    image: confluentinc/cp-schema-registry:7.2.1
     hostname: schema-registry
     container_name: schema-registry
     depends_on:
