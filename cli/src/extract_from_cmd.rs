@@ -1,5 +1,5 @@
+use std::collections::HashMap;
 use crate::BuskaCli;
-use buska_core::config::KafkaClusterConfig;
 use buska_core::search::bounds::{SearchBounds, SearchEnd, SearchStart};
 use buska_core::search::extractors::header::HeaderStringExtractor;
 use buska_core::search::extractors::json::json_single_extract;
@@ -29,7 +29,7 @@ pub(crate) fn perform_search(
         };
         tokio::task::spawn(async move {
             search_topic(
-                cluster_config,
+                &cluster_config,
                 cli.topic,
                 sender,
                 bounds,
@@ -42,7 +42,7 @@ pub(crate) fn perform_search(
         tokio::task::spawn(async move {
             let extractor = KeyExtractor::default();
             search_topic(
-                cluster_config,
+                &cluster_config,
                 cli.topic,
                 sender,
                 bounds,
@@ -57,7 +57,7 @@ pub(crate) fn perform_search(
                 .expect("JSON path specified through --value-json-path may be an invalid");
             let matcher = json_value_matcher_from_cli(&cli);
             search_topic(
-                cluster_config,
+                &cluster_config,
                 cli.topic,
                 sender,
                 bounds,
@@ -71,13 +71,8 @@ pub(crate) fn perform_search(
     }
 }
 
-fn extract_cluster_config(cli: &BuskaCli) -> KafkaClusterConfig {
-    if let Some(bootstrap_servers) = cli.bootstrap_servers.as_ref() {
-        KafkaClusterConfig {
-            bootstrap_servers: bootstrap_servers.clone(),
-            security: None,
-        }
-    } else if let Some(config_file_path) = cli.cluster_config_file.as_ref() {
+fn extract_cluster_config(cli: &BuskaCli) -> HashMap<String, String> {
+    if let Some(config_file_path) = cli.cluster_config_file.as_ref() {
         config::Config::builder()
             .add_source(config::File::from(Path::new(config_file_path.as_str())))
             .build()
@@ -85,9 +80,11 @@ fn extract_cluster_config(cli: &BuskaCli) -> KafkaClusterConfig {
                 panic!("Could not read the specified config file: {config_file_path:?}")
             })
             .try_deserialize()
-            .expect("Could not create Kafka cluster configuration from file")
+            .unwrap_or_else(|_| {
+                panic!("Could not create Kafka cluster configuration from file. Is {config_file_path:?} a valid configuration file?")
+            })
     } else {
-        panic!("Kafka cluster configuration not found, try using either --bootstrap-servers or --cluster-config-file")
+        panic!("Kafka cluster configuration not found. Please set this using the option --cluster-config-file")
     }
 }
 
@@ -148,7 +145,7 @@ pub(crate) fn json_value_matcher_from_cli(cli: &BuskaCli) -> Box<SizedPredicate<
             Box::new(OneOf::new(jsons))
         }
         (_, _, Some(regexp)) => {
-            Box::new(RegexMatch::new(regexp).expect("Could not create regular expression"))
+                Box::new(RegexMatch::new(regexp).expect("Could not create regular expression"))
         }
         _ => panic!("No matcher specified. Expecting: --matches-exactly, or --matches-one-of"),
     }
@@ -183,7 +180,6 @@ mod tests {
     fn test_numeric_matcher_from_cli() {
         let cli = BuskaCli {
             cluster_config_file: None,
-            bootstrap_servers: None,
             from_beginning: None,
             from_epoch_millis: None,
             from_iso_8601: None,
@@ -212,7 +208,6 @@ mod tests {
         let to_match = "something".to_string();
         let cli = BuskaCli {
             cluster_config_file: None,
-            bootstrap_servers: None,
             from_beginning: None,
             from_epoch_millis: None,
             from_iso_8601: None,

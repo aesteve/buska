@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::error::{KafkaError, KafkaResult};
@@ -5,7 +6,7 @@ use rdkafka::{Message, TopicPartitionList};
 use rdkafka::Offset::Offset;
 use rdkafka::util::Timeout;
 use tokio::sync::mpsc::Sender;
-use crate::{create_client, KafkaClusterConfig, PartitionMsg, PartitionProgress, Progress, RdOffset, SearchBounds, SearchEnd, SearchStart};
+use crate::{create_client, PartitionMsg, PartitionProgress, Progress, RdOffset, SearchBounds, SearchEnd, SearchStart};
 
 pub(crate) async fn consume_partition(
     consumer: &StreamConsumer,
@@ -46,7 +47,7 @@ pub(crate) async fn consume_partition(
 }
 
 pub(crate) fn prepare_partition(
-    config: &KafkaClusterConfig,
+    config: &HashMap<String, String>,
     partition: i32,
     topic: &str,
     bounds: &SearchBounds
