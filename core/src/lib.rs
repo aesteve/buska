@@ -135,7 +135,7 @@ pub async fn search_topic<T: Predicate<OwnedMessage> + Send + ?Sized>(
     {
         log::error!("Could not send notification {}", e);
     }
-    let prepared = prepare_all_partitions(topic_metadata, &conf, topic.clone(), &bounds).await;
+    let prepared = prepare_all_partitions(topic_metadata, conf, topic.clone(), &bounds).await;
     if let Err(e) = sender
         .send(SearchNotification::Prepare(PreparationStep::SeekPartitions))
         .await
