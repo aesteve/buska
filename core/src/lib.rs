@@ -1,4 +1,3 @@
-pub mod config;
 pub mod search;
 pub mod utils;
 
@@ -12,7 +11,6 @@ use crate::search::notifications::{
 use crate::search::Predicate;
 
 use chrono::{DateTime, Duration as ChronoDuration, NaiveDateTime, TimeZone, Utc};
-use config::KafkaClusterConfig;
 use rdkafka::config::RDKafkaLogLevel;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::error::KafkaResult;
@@ -21,7 +19,7 @@ use rdkafka::{ClientConfig, Offset as RdOffset, Offset};
 
 use crate::partition::{consume_partition, prepare_partition, seek_partition};
 use rdkafka::message::OwnedMessage;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinError;
@@ -104,7 +102,7 @@ impl PerPartitionStatus {
 ///   - matching some kind of record's predicate
 /// And sends notifications (including the search results) over a mpsc channel
 pub async fn search_topic<T: Predicate<OwnedMessage> + Send + ?Sized>(
-    conf: KafkaClusterConfig,
+    conf: &HashMap<String, String>,
     topic: String,
     sender: Sender<SearchNotification>,
     bounds: SearchBounds,
@@ -119,7 +117,7 @@ pub async fn search_topic<T: Predicate<OwnedMessage> + Send + ?Sized>(
     {
         log::error!("Could not send notification {}", e);
     }
-    let consumer = create_client(&conf);
+    let consumer = create_client(conf);
     log::debug!(
         "Kafka consumer created in {} millis",
         (Utc::now() - search_start).num_milliseconds()
@@ -137,7 +135,7 @@ pub async fn search_topic<T: Predicate<OwnedMessage> + Send + ?Sized>(
     {
         log::error!("Could not send notification {}", e);
     }
-    let prepared = prepare_all_partitions(topic_metadata, &conf, topic.clone(), &bounds).await;
+    let prepared = prepare_all_partitions(topic_metadata, conf, topic.clone(), &bounds).await;
     if let Err(e) = sender
         .send(SearchNotification::Prepare(PreparationStep::SeekPartitions))
         .await
@@ -184,28 +182,15 @@ pub async fn search_topic<T: Predicate<OwnedMessage> + Send + ?Sized>(
         .expect("Could not notify end of topic search, crashing");
 }
 
-pub(crate) fn create_client(conf: &KafkaClusterConfig) -> StreamConsumer {
+pub(crate) fn create_client(conf: &HashMap<String, String>) -> StreamConsumer {
     let mut builder = ClientConfig::new();
-    builder
-        .set("bootstrap.servers", conf.bootstrap_servers.clone())
-        .set_log_level(RDKafkaLogLevel::Debug)
-        .set("group.id", "buska-consumer")
-        .set("enable.auto.commit", "false")
-        .set("fetch.min.bytes", "1000000")
-        .set("auto.offset.reset", "earliest");
-    if let Some(security_conf) = &conf.security {
-        builder
-            .set("security.protocol", "SSL")
-            .set(
-                "ssl.key.location",
-                security_conf.service_key_location.clone(),
-            )
-            .set(
-                "ssl.certificate.location",
-                security_conf.service_cert_location.clone(),
-            )
-            .set("ssl.ca.location", security_conf.ca_pem_location.clone());
+    builder.set_log_level(RDKafkaLogLevel::Debug);
+    for (key, val) in conf {
+        builder.set(key, val);
     }
+    builder.set("group.id", "buska-consumer")
+        .set("enable.auto.commit", "false")
+        .set("auto.offset.reset", "earliest");
     builder.create().unwrap()
 }
 
@@ -255,7 +240,7 @@ async fn wait_for_partitions<T: Predicate<OwnedMessage> + Send + ?Sized>(
 
 async fn prepare_all_partitions(
     topic_metadata: Vec<i32>,
-    conf: &KafkaClusterConfig,
+    conf: &HashMap<String, String>,
     topic: String,
     bounds: &SearchBounds,
 ) -> Vec<Result<PartitionPreparationResult, JoinError>> {
@@ -325,6 +310,7 @@ async fn fetch_topic_metadata(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use chrono::Utc;
     use quickcheck::{Arbitrary, Gen};
     use std::time::Duration;
@@ -338,7 +324,6 @@ mod tests {
     use serde_json::to_string;
     use tokio::sync::mpsc::Receiver;
 
-    use crate::config::KafkaClusterConfig;
     use crate::search::extractors::json::json_single_extract;
     use crate::search::matchers::PerfectMatch;
     use crate::search::notifications::SearchNotification;
@@ -361,11 +346,10 @@ mod tests {
 
     /// Returns a KafkaClusterConfig matching the test environment
     /// (i.e. localhost, KAFKA_PORT, and no SSL config)
-    pub(crate) fn test_cluster_config() -> KafkaClusterConfig {
-        KafkaClusterConfig {
-            bootstrap_servers: test_bootstrap_servers(),
-            security: None,
-        }
+    pub(crate) fn test_cluster_config() -> HashMap<String, String> {
+        HashMap::from([
+            ("bootstrap.servers".to_string(), test_bootstrap_servers())
+        ])
     }
 
     /// Returns a Kafka (librdkafka-rust) client configuration matching the test environment
@@ -647,7 +631,7 @@ mod tests {
             let matcher = PerfectMatch::new(serde_json::json!(4));
             let mut search_definition = SearchDefinition::new(extractor, Box::new(matcher));
             search_topic(
-                conf,
+                &conf,
                 "test2".to_string(),
                 sender,
                 bounds,

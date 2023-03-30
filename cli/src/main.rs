@@ -12,8 +12,7 @@ use crate::output::{cli_notifications_loop, Out};
 /// Welcome to Buska, a CLI for looking for messages within an Apache Kafka cluster
 /// The CLI is composed of 3 parts:
 ///   - The Kafka configuration:
-///     - either a toml file describing cluster options, like SSL config. etc. see ... (TODO: add link for an example config file)
-///     - or by passing --bootstrap-servers as in other Kafka CLIs
+///     - a toml file describing cluster options, like bootstrap.servers, SSL config. etc. see ... (TODO: add link for an example config file)
 ///   - Specifying the search bounds:
 ///      - where should we start at? (--from-beginning, --from-epoch-millis=1636308199000, --from-iso_8601=2021-11-07T19:03:55+0100)
 ///      - when should we stop searching? (--to-current-last, --to-epoch-millis=1636308199000, --to-iso_8601=2021-11-07T19:03:55+0100)
@@ -23,13 +22,28 @@ use crate::output::{cli_notifications_loop, Out};
 ///     - The topic we should search in: --topic
 ///
 /// A full valid example could be:
-///   buska --bootstrap-servers localhost:9092 --from-beginning --to-current-last --extract-header=someheader --matches-exactly=something --out=stdout
+///   buska --cluster-config-file=/opt/secrets/cluster.toml \
+///     --from-beginning \
+///     --to-current-last \
+///     --extract-header=someheader \
+///     --matches-exactly=something \
+///     --out=stdout
 ///
 /// Another one:
-///   buska --cluster-config-file=/opt/secrets/cluster.toml --from-iso-8601=2021-11-07T00:00:00+0100 --to-iso-8601=2021-11-08T00:00:00+0100 --extract-value-json-path=$.somefield.nested --matches-exactly=valueWereLookingFor --out=stdout
+///   buska --cluster-config-file=/opt/secrets/cluster.toml \
+///     --from-iso-8601=2021-11-07T00:00:00+0100 \
+///     --to-iso-8601=2021-11-08T00:00:00+0100 \
+///     --extract-value-json-path=$.somefield.nested \
+///     --matches-exactly=valueWereLookingFor \
+///     --out=stdout
 ///
 /// Another one:
-///   buska --bootstrap-servers localhost:9092 --from-beginning --to-current-last --extract-key=true --matches-regex=prefix_.*  --out=/tmp/matched.txt
+///   buska --cluster-config-file=/opt/secrets/cluster.toml \
+///     --from-beginning \
+///     --to-current-last \
+///     --extract-key=true \
+///     --matches-regex=prefix_.*  \
+///     --out=/tmp/matched.txt
 ///
 #[derive(Clone, Parser, Debug)]
 #[clap(version = "0.0.1", author = "Arnaud Esteve <arnaud.esteve@gmail.com>")]
@@ -37,8 +51,6 @@ struct BuskaCli {
     /// Kafka cluster configuration
     #[clap(short, long)]
     cluster_config_file: Option<String>,
-    #[clap(short, long)]
-    bootstrap_servers: Option<String>,
 
     /// Search bounds
     /// Start searching from the beginning of the topic ('earliest')

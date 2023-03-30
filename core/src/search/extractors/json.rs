@@ -187,7 +187,7 @@ mod tests {
             let matcher = PerfectMatch::new(serde_json::json!(4));
             let mut search_definition = SearchDefinition::new(extractor, Box::new(matcher));
             search_topic(
-                conf,
+                &conf,
                 topic.to_string(),
                 sender,
                 bounds,
